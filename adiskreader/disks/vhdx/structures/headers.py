@@ -562,6 +562,7 @@ class BAT:
             temp = int.from_bytes(data, byteorder='little', signed=False)
             state = temp & 0b111
             offset = temp >> 20
+            offset *= 1024*1024 # not sure about the multiplier
             bat.entries.append((state, offset))
         return bat
 

@@ -1,13 +1,21 @@
 import asyncio
 from adiskreader.disks.vhdx import VHDXDisk
-from adiskreader.partitions.ntfs import NTFSPartition
+from adiskreader.partitions import Partitions
+
+from adiskreader.filesystems.ntfs.ntfs import NTFS
 
 async def amain():
-    fname = 'a.vhdx'
+    fname = '/mnt/hgfs/vhdxtest/WinDev2311Eval.vhdx'
     vhdx = await VHDXDisk.from_file(fname)
-    test = await vhdx.read_LBA(262184)
+    partitions = Partitions(vhdx)
+    await partitions.find_partitions()
+
+    print(partitions)
+
+    part = partitions.partitions[3]
+
     
-    partition = await NTFSPartition.from_disk(vhdx, 262184)
+    partition = await NTFS.from_partition(part)
     print(vhdx.active_meta)
     print(partition)
     #print(test.hex())

@@ -53,8 +53,9 @@ class MBRPartitionEntry:
         self.start_chs = None
         self.partition_type = None
         self.end_chs = None
-        self.start_lba = None
+        self.FirstLBA = None
         self.size = None
+        self.PartitionName = '' #for compat with GPTPartitionEntry
 
     @staticmethod
     def from_bytes(data):
@@ -67,7 +68,7 @@ class MBRPartitionEntry:
         entry.start_chs = buff.read(3)
         entry.partition_type = buff.read(1)
         entry.end_chs = buff.read(3)
-        entry.start_lba = int.from_bytes(buff.read(4), 'little', signed=False)
+        entry.FirstLBA = int.from_bytes(buff.read(4), 'little', signed=False)
         entry.size = int.from_bytes(buff.read(4), 'little', signed=False)
         return entry
     
@@ -78,6 +79,6 @@ class MBRPartitionEntry:
         res.append('Start CHS: {}'.format(self.start_chs.hex()))
         res.append('Partition Type: {}'.format(self.partition_type.hex()))
         res.append('End CHS: {}'.format(self.end_chs.hex()))
-        res.append('Start LBA: {}'.format(self.start_lba))
+        res.append('FirstLBA: {}'.format(self.FirstLBA))
         res.append('Size: {}'.format(self.size))
         return '\n'.join(res)

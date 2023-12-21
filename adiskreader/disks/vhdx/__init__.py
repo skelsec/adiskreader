@@ -1,7 +1,8 @@
 import io
+import copy
+from typing import List
 from adiskreader.disks.vhdx.structures.headers import Headers, VHDX_KNOWN_REGIONS, BAT, MetaDataRegion
-from adiskreader.disks.MBR import MBR
-from adiskreader.disks.GPT import GPT
+from functools import lru_cache
 
 class VHDXDisk:
     def __init__(self):
@@ -11,7 +12,10 @@ class VHDXDisk:
         self.active_meta:MetaDataRegion = None
         self.active_bat:BAT = None
         self.boot_record = None
-        self.sector_size = 512
+        self.lba_per_block = None
+        self.use_buffer = True
+        self.__lba_cache = {}
+        self.__block_cache = {}
 
     def set_stream(self, stream:io.BytesIO):
         self.__stream = stream
@@ -30,19 +34,7 @@ class VHDXDisk:
         disk = VHDXDisk()
         disk.set_stream(buffer)
         await disk.read_headers()
-        await disk.read_boot_record()
         return disk
-    
-    async def read_boot_record(self):
-        data = await self.read_LBA(0)
-        try:
-            self.boot_record = MBR.from_bytes(data)
-        except:
-            self.boot_record = await GPT.from_disk(self)
-        else:
-            if len(self.boot_record.partition_table) == 1 and self.boot_record.partition_table[0].partition_type == b'\xEE':
-                self.boot_record = await GPT.from_disk(self)
-        print(self.boot_record)
 
     async def read_headers(self):
         data = self.__stream.read(1*1024*1024)
@@ -70,37 +62,98 @@ class VHDXDisk:
             elif region_type == '8B7CA206-4790-4B9A-B8FE-575F050F886E':
                 self.active_meta = region
 
-    async def read_LBA(self, lba:int):
-        # find the correct LBA from BAT
-        #start_idx = lba * 256
-        #temp_lba = 0
-        #res_entry = None
-        #for entry in self.active_bat.entries:
-        #    res_entry = entry
-        #    if entry[0] == 0:
-        #        continue
-        #    if temp_lba == lba:
-        #        break
-        #    if temp_lba > lba:
-        #        raise Exception('LBA not found')
-        #    temp_lba += 1
-        #state, offset = res_entry
-        #state, offset = self.active_bat.entries[start_idx]
-        # todo: check state
-        # read the data
-        
-        lba_per_block = self.active_meta.BlockSize // self.active_meta.LogicalSectorSize
-        print(lba_per_block)
-        block_idx, offset_in_block = divmod(lba,lba_per_block)
-        print(block_idx)
-        print(offset_in_block)
-        entry = self.active_bat.entries[block_idx]
-        offset = entry[1] * (1024*1024)  + offset_in_block * self.active_meta.LogicalSectorSize
-        
-        
-        print('Reading LBA {} from offset {} with state {}'.format(lba, offset, entry[0]))
-        self.__stream.seek(offset, 0)
-        data = self.__stream.read(512)
+        self.lba_per_block = self.active_meta.BlockSize // self.active_meta.LogicalSectorSize
+        self.__lba_cache = {}
+        if self.use_buffer is True:
+            self.__block_cache = {}
+
+    def __add_to_cache_return(self, lba:int, data:bytes):
+        self.__lba_cache[lba] = data
         return data
+    
+    async def read_block(self, block_idx:int):
+        entry = self.active_bat.entries[block_idx]
+        offset = entry[1]
+        self.__stream.seek(offset, 0)
+        data = self.__stream.read(self.active_meta.BlockSize)
+        if self.use_buffer is True:
+            self.__block_cache[block_idx] = data
+        return data
+
+    async def read_LBAs(self, lbas:List[int]):
+        #print(f'Reading LBAs: {lbas}')
+
+        # Check if LBAs are contiguous
+        sorted_lbas = sorted(lbas)
+        if any(sorted_lbas[i] + 1 != sorted_lbas[i + 1] for i in range(len(sorted_lbas) - 1)):
+            raise Exception('LBAs are not contiguous')
+
+        # Get the range of blocks to read
+        first_lba = sorted_lbas[0]
+        last_lba = sorted_lbas[-1]
+        first_block_idx = first_lba // self.lba_per_block
+        last_block_idx = last_lba // self.lba_per_block
+
+        input(f'First block: {first_block_idx}, last block: {last_block_idx}')
+        # Read the blocks
+        block_data = b''
+        for block_idx in range(first_block_idx, last_block_idx + 1):
+            if block_idx in self.__block_cache:
+                block_data += self.__block_cache[block_idx]
+            else:
+                block_data += await self.read_block(block_idx)
+
+        # Calculate offsets within the block data
+        start_offset = (first_lba % self.lba_per_block) * self.active_meta.LogicalSectorSize
+        end_offset = ((last_lba + 1) % self.lba_per_block) * self.active_meta.LogicalSectorSize
+        if end_offset == 0:
+            end_offset = None  # Handle case where last LBA is the last in a block
+
+        # Extract and return the relevant portion of block data
+        return block_data[start_offset:end_offset]
+
+    async def read_LBA(self, lba:int):
+        if lba in self.__lba_cache:
+            return self.__lba_cache[lba]
+        
+        block_idx = lba // self.lba_per_block
+        block = self.__block_cache.get(block_idx, None)
+        if block is None:
+            block = await self.read_block(block_idx)
+        offset_in_block = lba % self.lba_per_block
+        #block_idx, offset_in_block = divmod(lba, self.lba_per_block)
+        #entry = self.active_bat.entries[block_idx]
+        #offset = entry[1] * (1024*1024)  + offset_in_block * self.active_meta.LogicalSectorSize
+        #offset = entry[1] + offset_in_block * self.active_meta.LogicalSectorSize
+
+        offset = offset_in_block * self.active_meta.LogicalSectorSize
+        return self.__add_to_cache_return(lba, block[offset:offset+self.active_meta.LogicalSectorSize])
+        #print('Reading LBA {} from offset {} with state {}'.format(lba, offset, entry[0]))
+        
+        if self.use_buffer is True:
+            if len(self.__buffer) == 0:
+                await self.refresh_buffer(offset)
+                result = self.__buffer[:self.active_meta.LogicalSectorSize]
+                #print('Firstrun res: %s' % result)
+                return self.__add_to_cache_return(lba, result)
+            
+            if self.__buffer_file_offset <= offset <= self.__buffer_file_offset + len(self.__buffer):
+                if offset + self.active_meta.LogicalSectorSize <= self.__buffer_file_offset + len(self.__buffer):
+                    #print('Using buffer')
+                    corrected_offset = offset - self.__buffer_file_offset
+                    result = self.__buffer[corrected_offset: corrected_offset + self.active_meta.LogicalSectorSize]
+                    #input('Cache res: %s' % result)
+                    return self.__add_to_cache_return(lba, result)
+            await self.refresh_buffer(offset)
+            result = self.__buffer[:self.active_meta.LogicalSectorSize]
+            return self.__add_to_cache_return(lba, result)
+                
+        
+        else:
+            self.__stream.seek(offset, 0)
+            result = self.__stream.read(self.active_meta.LogicalSectorSize)
+            return self.__add_to_cache_return(lba, result)
+
+    
 
         
