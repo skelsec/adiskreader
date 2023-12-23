@@ -96,12 +96,9 @@ class NTFS:
         return data[:self.cluster_size]
     
     async def read_sequential_clusters(self, cluster_idx, cnt, batch_size=10*1024*1024):
-        #input('read_sequential_clusters %s %s' % (cluster_idx, cnt))
         lba_indices = []
         total_sectors = self.pbs.sectors_per_cluster * cnt
 
-        #print('Data to be read: %s sectors' % ((total_sectors * self.pbs.bytes_per_sector)/1024/1024))
-        #input('total_sectors %s' % total_sectors)
         requested_size = 0
         for i in range(total_sectors):
             requested_size += self.pbs.sectors_per_cluster * self.pbs.bytes_per_sector
@@ -109,8 +106,7 @@ class NTFS:
             lba_indices.append(lba)
 
             if requested_size >= batch_size:
-                data = await self.__disk.read_LBAs(lba_indices)
-                yield data
+                yield await self.__disk.read_LBAs(lba_indices)
                 requested_size = 0
                 lba_indices = []
 

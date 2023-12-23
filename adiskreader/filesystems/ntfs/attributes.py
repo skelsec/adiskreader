@@ -1,4 +1,7 @@
 import io
+import enum
+import uuid
+from winacl.dtyp.security_descriptor import SECURITY_DESCRIPTOR as SD
 
 class Attribute:
     def __init__(self):
@@ -62,6 +65,14 @@ class AttributeHeader:
             header = NonResidentAttribute.from_header(header, buff)
         
         return header
+
+    #async def reparse(self, fs):
+    #    # Reparse the attribute by reading data run references and re-reading the attribute
+    #    # Do not use this on DATA attributes, as it will read the entire file into memory
+    #    buff = io.BytesIO()
+    #    async for chunk in self.read_attribute_data(fs):
+    #        buff.write(chunk)
+    #    return type(self).from_header(header, buff)
     
     @staticmethod
     def from_bytes(data:bytes):
@@ -129,7 +140,7 @@ class ResidentAttribute(AttributeHeader):
     def __str__(self):
         res = []
         res.append('Resident Attribute')
-        res.append('Type: {}'.format(self.type))
+        res.append('Type: {}'.format(hex(self.type)))
         res.append('Length: {}'.format(self.length))
         res.append('Non Resident: {}'.format(self.non_resident))
         res.append('Name Length: {}'.format(self.name_length))
@@ -162,7 +173,7 @@ class NonResidentAttribute(AttributeHeader):
     def __str__(self):
         res = []
         res.append('Non Resident Attribute')
-        res.append('Type: {}'.format(self.type))
+        res.append('Type: {}'.format(hex(self.type)))
         res.append('Length: {}'.format(self.length))
         res.append('Non Resident: {}'.format(self.non_resident))
         res.append('Name Length: {}'.format(self.name_length))
@@ -203,27 +214,6 @@ class NonResidentAttribute(AttributeHeader):
         if attr.name_length > 0:
             buffer.seek(attr.name_offset, 0)
             attr.name = buffer.read(attr.name_length*2).decode('utf-16-le')
-            
-        ##processing runlist
-        #buffer.seek(attr.runlist_offset, 0) #1  # Relative seek to the runlist
-        #previous_offset = 0
-        #while True:
-        #    first_byte = int.from_bytes(buffer.read(1), 'little')
-        #    if first_byte == 0:
-        #        break  # End of data run
-        #
-        #    len_length = first_byte & 0x0F
-        #    offset_length = (first_byte >> 4) & 0x0F
-        #
-        #    run_length = int.from_bytes(buffer.read(len_length), 'little')
-        #    run_offset = int.from_bytes(buffer.read(offset_length), 'little', signed=True) if offset_length else 0
-        #
-        #    if run_offset != 0:
-        #        # not a sparse run, convert to absolute offset
-        #        run_offset = previous_offset + run_offset
-        #        # only store the offset if it's not a sparse run
-        #        previous_offset = run_offset
-        #    attr.data_runs.append((run_offset, run_length))
 
         # Processing runlist
         buffer.seek(attr.runlist_offset, 0)  # Relative seek to the runlist
@@ -247,7 +237,7 @@ class NonResidentAttribute(AttributeHeader):
                 current_cluster = 0  # Reset current cluster for sparse run
 
             attr.data_runs.append((current_cluster, run_length))
-
+        
         return attr
 
     async def get_data_size(self, fs):
@@ -260,20 +250,33 @@ class NonResidentAttribute(AttributeHeader):
     async def read_attribute_data(self, fs):
         """Reads the actual data using data run references and a fs."""
         """Yields data in chunks"""
+
+        print(self.real_size)
+        print(self.alloc_size)
+        print(self.init_size)
+        print(await self.get_data_size(fs))
+        input(self.data_runs)
         
-        remove_this_ctr = 0
+        rem_len = self.real_size
         for run_offset, run_length in self.data_runs:
-            remove_this_ctr += 1
-            input((run_offset, run_length))
             if run_offset == 0:
-                yield b'\x00' * (run_length * fs.cluster_size)
+                data = b'\x00' * (run_length * fs.cluster_size)
+                rem_len -= len(data)
+                if rem_len <= 0:
+                    data = data[:rem_len]
+                    yield data
+                    break
+                yield data
                 continue
             
-            data = b''
             async for data in fs.read_sequential_clusters(run_offset, run_length):
+                rem_len -= len(data)
+                print('Rem len: %s' % rem_len)
+                if rem_len <= 0:
+                    data = data[:rem_len]
+                    yield data
+                    break
                 yield data
-                if remove_this_ctr == 2:
-                    input(data[0:1024])
 
 class STANDARD_INFORMATION(Attribute):
     def __init__(self):
@@ -325,7 +328,7 @@ class STANDARD_INFORMATION(Attribute):
         res.append('Time Modified: {}'.format(self.time_modified))
         res.append('Time MFT Modified: {}'.format(self.time_mft_modified))
         res.append('Time Accessed: {}'.format(self.time_accessed))
-        res.append('Flags: {}'.format(self.flags))
+        res.append('Flags: {}'.format(str(self.flags)))
         res.append('Maximum Versions: {}'.format(self.maximum_versions))
         res.append('Version: {}'.format(self.version))
         res.append('Class ID: {}'.format(self.classid))
@@ -340,6 +343,7 @@ class FILE_NAME(Attribute):
     def __init__(self):
         super().__init__()
         self.parent_ref = None
+        self.parent_seq = None
         self.time_created = None
         self.time_modified = None
         self.time_mft_modified = None
@@ -365,14 +369,15 @@ class FILE_NAME(Attribute):
     @staticmethod
     def from_buffer(buff):
         si = FILE_NAME()
-        si.parent_ref = int.from_bytes(buff.read(8), 'little')
+        si.parent_ref = int.from_bytes(buff.read(6), 'little')
+        si.parent_seq = int.from_bytes(buff.read(2), 'little')
         si.time_created = int.from_bytes(buff.read(8), 'little')
         si.time_modified = int.from_bytes(buff.read(8), 'little')
         si.time_mft_modified = int.from_bytes(buff.read(8), 'little')
         si.time_accessed = int.from_bytes(buff.read(8), 'little')
         si.allocated_size = int.from_bytes(buff.read(8), 'little')
         si.real_size = int.from_bytes(buff.read(8), 'little')
-        si.flags = int.from_bytes(buff.read(4), 'little')
+        si.flags = FileNameFlag(int.from_bytes(buff.read(4), 'little'))
         si.reparse_value = int.from_bytes(buff.read(4), 'little')
         si.name_length = int.from_bytes(buff.read(1), 'little')
         si.namespace = int.from_bytes(buff.read(1), 'little')
@@ -384,18 +389,36 @@ class FILE_NAME(Attribute):
         res.append('File Name')
         res.append('Header: {}'.format(self.header))
         res.append('Parent Ref: {}'.format(self.parent_ref))
+        res.append('Parent Seq: {}'.format(self.parent_seq))
         res.append('Time Created: {}'.format(self.time_created))
         res.append('Time Modified: {}'.format(self.time_modified))
         res.append('Time MFT Modified: {}'.format(self.time_mft_modified))
         res.append('Time Accessed: {}'.format(self.time_accessed))
         res.append('Allocated Size: {}'.format(self.allocated_size))
         res.append('Real Size: {}'.format(self.real_size))
-        res.append('Flags: {}'.format(self.flags))
+        res.append('Flags: {}'.format(str(self.flags)))
         res.append('Reparse Value: {}'.format(self.reparse_value))
         res.append('Name Length: {}'.format(self.name_length))
         res.append('Namespace: {}'.format(self.namespace))
         res.append('Name: {}'.format(self.name))
         return '\n'.join(res)
+
+class FileNameFlag(enum.IntFlag):
+    READ_ONLY = 0x0001
+    HIDDEN = 0x0002
+    SYSTEM = 0x0004
+    ARCHIVE = 0x0020
+    DEVICE = 0x0040
+    NORMAL = 0x0080
+    TEMPORARY = 0x0100
+    SPARSE_FILE = 0x0200
+    REPARSE_POINT = 0x0400
+    COMPRESSED = 0x0800
+    OFFLINE = 0x1000
+    NOT_CONTENT_INDEXED = 0x2000
+    ENCRYPTED = 0x4000
+    DIRECTORY = 0x10000000
+    INDEX_VIEW = 0x20000000
 
 class DATA(Attribute):
     def __init__(self):
@@ -425,9 +448,11 @@ class DATA(Attribute):
         return '\n'.join(res)
 
 class BITMAP(Attribute):
+    # not much info on this one
     def __init__(self):
         super().__init__()
-        self.data = None
+        self.bitfield = None
+
 
     @staticmethod
     def from_header(header):
@@ -442,13 +467,13 @@ class BITMAP(Attribute):
     @staticmethod
     def from_buffer(buff):
         si = BITMAP()
-        si.data = buff.read()
+        si.bitfield = buff.read()
         return si
     
     def __str__(self):
         res = []
         res.append('Bitmap')
-        res.append('Data: {}'.format(self.data))
+        res.append('BitField: {}'.format(self.bitfield))
         return '\n'.join(res)
 
 # INCOMPLETE
@@ -459,6 +484,7 @@ class INDEX_ROOT(Attribute):
         self.collation_rule = None
         self.bytes_per_record = None
         self.clusters_per_index_record = None
+        self.padding = None
         self.index_header = None
         self.index_entries = []
 
@@ -479,6 +505,7 @@ class INDEX_ROOT(Attribute):
         si.collation_rule = int.from_bytes(buff.read(4), 'little')
         si.bytes_per_record = int.from_bytes(buff.read(4), 'little')
         si.clusters_per_index_record = int.from_bytes(buff.read(1), 'little')
+        si.padding = int.from_bytes(buff.read(3), 'little')
         si.index_header = IndexHeader.from_buffer(buff)
         while buff.tell() < len(buff.getvalue()):
             si.index_entries.append(IndexEntry.from_buffer(buff))
@@ -508,7 +535,7 @@ class IndexEntry:
 
 class IndexHeader:
     def __init__(self):
-        self.entries_offset = None
+        self.first_entry_offset = None
         self.index_length = None
         self.allocated_size = None
         self.flags = None
@@ -521,7 +548,7 @@ class IndexHeader:
     @staticmethod
     def from_buffer(buff):
         ih = IndexHeader()
-        ih.entries_offset = int.from_bytes(buff.read(4), 'little')
+        ih.first_entry_offset = int.from_bytes(buff.read(4), 'little')
         ih.index_length = int.from_bytes(buff.read(4), 'little')
         ih.allocated_size = int.from_bytes(buff.read(4), 'little')
         ih.flags = int.from_bytes(buff.read(1), 'little')
@@ -531,7 +558,7 @@ class IndexHeader:
 class VOLUME_NAME(Attribute):
     def __init__(self):
         super().__init__()
-        self.data = None
+        self.name = None
 
     @staticmethod
     def from_header(header):
@@ -546,18 +573,23 @@ class VOLUME_NAME(Attribute):
     @staticmethod
     def from_buffer(buff):
         si = VOLUME_NAME()
-        si.data = buff.read()
+        si.name = buff.read().decode('utf-16-le')
         return si
     
     def __str__(self):
         res = []
         res.append('Volume Name')
-        res.append('Data: {}'.format(self.data))
+        res.append('Name: {}'.format(self.name))
         return '\n'.join(res)
 
-class VOLUME_INFORMATION:
+class VOLUME_INFORMATION(Attribute):
     def __init__(self):
-        self.data = None
+        super().__init__()
+        self.unknown = None
+        self.major_version = None
+        self.minor_version = None
+        self.flags = None
+        self.unknown2 = None
     
     @staticmethod
     def from_header(header):
@@ -572,18 +604,37 @@ class VOLUME_INFORMATION:
     @staticmethod
     def from_buffer(buff):
         si = VOLUME_INFORMATION()
-        si.data = buff.read()
+        si.unknown = int.from_bytes(buff.read(8), 'little')
+        si.major_version = int.from_bytes(buff.read(1), 'little')
+        si.minor_version = int.from_bytes(buff.read(1), 'little')
+        si.flags = VOLUME_INFORMATION_FLAG(int.from_bytes(buff.read(2), 'little'))
+        si.unknown2 = int.from_bytes(buff.read(4), 'little')
         return si
     
     def __str__(self):
         res = []
         res.append('Volume Information')
-        res.append('Data: {}'.format(self.data))
+        res.append('Unknown: {}'.format(self.unknown))
+        res.append('Major Version: {}'.format(self.major_version))
+        res.append('Minor Version: {}'.format(self.minor_version))
+        res.append('Flags: {}'.format(self.flags))
+        res.append('Unknown2: {}'.format(self.unknown2))
         return '\n'.join(res)
 
-class SECURITY_DESCRIPTOR:
+class VOLUME_INFORMATION_FLAG(enum.IntFlag):
+    Dirty = 0x0001
+    ResizeLogFile = 0x0002
+    UpgradeOnMount = 0x0004
+    MountedOnNT4 = 0x0008
+    DeleteUSNUnderway = 0x0010
+    RepairObjectId = 0x0020
+    ModifiedByChkdsk = 0x8000
+
+
+class SECURITY_DESCRIPTOR(Attribute):
     def __init__(self):
-        self.data = None
+        super().__init__()
+        self.sid = None
     
     @staticmethod
     def from_header(header):
@@ -598,17 +649,18 @@ class SECURITY_DESCRIPTOR:
     @staticmethod
     def from_buffer(buff):
         si = SECURITY_DESCRIPTOR()
-        si.data = buff.read()
+        si.sid = SD.from_buffer(buff)
         return si
     
     def __str__(self):
         res = []
         res.append('SECURITY_DESCRIPTOR')
-        res.append('Data: {}'.format(self.data))
+        res.append('SID: {}'.format(self.sid))
         return '\n'.join(res)
 
-class INDEX_ALLOCATION:
+class INDEX_ALLOCATION(Attribute):
     def __init__(self):
+        super().__init__()
         self.data = None
     
     @staticmethod
@@ -633,9 +685,10 @@ class INDEX_ALLOCATION:
         res.append('Data: {}'.format(self.data))
         return '\n'.join(res)
 
-class LOGGED_UTILITY_STREAM:
+class LOGGED_UTILITY_STREAM(Attribute):
     # same as DATA
     def __init__(self):
+        super().__init__()
         self.data = None
     
     @staticmethod
@@ -660,9 +713,13 @@ class LOGGED_UTILITY_STREAM:
         res.append('Data: {}'.format(self.data))
         return '\n'.join(res)
 
-class OBJECT_ID:
+class OBJECT_ID(Attribute):
     def __init__(self):
-        self.data = None
+        super().__init__()
+        self.object_id = None
+        self.birth_volume_id = None
+        self.birth_object_id = None
+        self.domain_id = None
     
     @staticmethod
     def from_header(header):
@@ -672,18 +729,25 @@ class OBJECT_ID:
 
     @staticmethod
     def from_bytes(data):
+        data = data + b'\x00' * (0x40 - len(data)) #yes, this is actually per documentation
         return OBJECT_ID.from_buffer(io.BytesIO(data))
     
     @staticmethod
     def from_buffer(buff):
         si = OBJECT_ID()
-        si.data = buff.read()
+        si.object_id = uuid.UUID(bytes_le = buff.read(16))
+        si.birth_volume_id = uuid.UUID(bytes_le = buff.read(16))
+        si.birth_object_id = uuid.UUID(bytes_le = buff.read(16))
+        si.domain_id = uuid.UUID(bytes_le = buff.read(16))
         return si
     
     def __str__(self):
         res = []
         res.append('OBJECT_ID')
-        res.append('Data: {}'.format(self.data))
+        res.append('Object ID: {}'.format(self.object_id))
+        res.append('Birth Volume ID: {}'.format(self.birth_volume_id))
+        res.append('Birth Object ID: {}'.format(self.birth_object_id))
+        res.append('Domain ID: {}'.format(self.domain_id))
         return '\n'.join(res)
 
 class ATTRIBUTE_LIST:
@@ -712,9 +776,12 @@ class ATTRIBUTE_LIST:
         res.append('Data: {}'.format(self.data))
         return '\n'.join(res)
 
-class EA_INFORMATION:
+class EA_INFORMATION(Attribute):
     def __init__(self):
-        self.data = None
+        super().__init__()
+        self.packed_size = None
+        self.need_ea_cnt = None
+        self.unpacket_size = None
     
     @staticmethod
     def from_header(header):
@@ -729,18 +796,28 @@ class EA_INFORMATION:
     @staticmethod
     def from_buffer(buff):
         si = EA_INFORMATION()
-        si.data = buff.read()
+        si.packed_size = int.from_bytes(buff.read(2), 'little')
+        si.need_ea_cnt = int.from_bytes(buff.read(2), 'little')
+        si.unpacket_size = int.from_bytes(buff.read(4), 'little')
         return si
     
     def __str__(self):
         res = []
         res.append('EA_INFORMATION')
-        res.append('Data: {}'.format(self.data))
+        res.append('Packed Size: {}'.format(self.packed_size))
+        res.append('Need EA Cnt: {}'.format(self.need_ea_cnt))
+        res.append('Unpacket Size: {}'.format(self.unpacket_size))
         return '\n'.join(res)
 
-class EA:
+class EA(Attribute):
     def __init__(self):
-        self.data = None
+        super().__init__()
+        self.next_offset = None
+        self.flags = None
+        self.name_length = None
+        self.value_length = None
+        self.name = None
+        self.value = None
     
     @staticmethod
     def from_header(header):
@@ -755,18 +832,32 @@ class EA:
     @staticmethod
     def from_buffer(buff):
         si = EA()
-        si.data = buff.read()
+        si.next_offset = int.from_bytes(buff.read(4), 'little')
+        si.flags = int.from_bytes(buff.read(1), 'little')
+        si.name_length = int.from_bytes(buff.read(1), 'little')
+        si.value_length = int.from_bytes(buff.read(2), 'little')
+        si.name = buff.read(si.name_length) #maybe utf-16-le?
+        si.value = buff.read(si.value_length)
         return si
     
     def __str__(self):
         res = []
         res.append('EA')
-        res.append('Data: {}'.format(self.data))
+        res.append('Next Offset: {}'.format(self.next_offset))
+        res.append('Flags: {}'.format(self.flags))
+        res.append('Name Length: {}'.format(self.name_length))
+        res.append('Value Length: {}'.format(self.value_length))
+        res.append('Name: {}'.format(self.name))
+        res.append('Value: {}'.format(self.value))
         return '\n'.join(res)
 
-class REPARSE_POINT:
+class REPARSE_POINT(Attribute):
     def __init__(self):
-        self.data = None
+        super().__init__()
+        self.reparse_type = None
+        self.reparse_data_length = None
+        self.unused = None
+        self.reparse_data = None
     
     @staticmethod
     def from_header(header):
@@ -781,17 +872,24 @@ class REPARSE_POINT:
     @staticmethod
     def from_buffer(buff):
         si = REPARSE_POINT()
-        si.data = buff.read()
+        si.reparse_type = int.from_bytes(buff.read(4), 'little')
+        si.reparse_data_length = int.from_bytes(buff.read(2), 'little')
+        si.unused = int.from_bytes(buff.read(2), 'little')
+        si.reparse_data = buff.read(si.reparse_data_length)
         return si
     
     def __str__(self):
         res = []
         res.append('REPARSE_POINT')
-        res.append('Data: {}'.format(self.data))
+        res.append('Reparse Type: {}'.format(self.reparse_type))
+        res.append('Reparse Data Length: {}'.format(self.reparse_data_length))
+        res.append('Unused: {}'.format(self.unused))
+        res.append('Reparse Data: {}'.format(self.reparse_data))
         return '\n'.join(res)
 
-class PROPERTY_SET:
+class PROPERTY_SET(Attribute):
     def __init__(self):
+        super().__init__()
         self.data = None
     
     @staticmethod
@@ -815,6 +913,7 @@ class PROPERTY_SET:
         res.append('PROPERTY_SET')
         res.append('Data: {}'.format(self.data))
         return '\n'.join(res)
+
 # do not use
 class EndAttribute(Attribute):
     def __init__(self):

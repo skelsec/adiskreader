@@ -47,6 +47,35 @@ class FileRecord:
     def add_attribute(self, attr:Attribute):
         self.attributes.append(attr)
     
+    def get_main_filename_attr(self):
+        '''Returns the main filename attribute of the entry.
+
+        As an entry can have multiple FILENAME attributes, this function allows
+        to return the main one, i.e., the one with the lowest attribute id and
+        the "biggest" namespace.
+        '''
+        fn_attrs = self.get_attribute_by_type(0x30)
+        high_attr_id = 0xFFFFFFFF
+        main_fn = None
+
+        if fn_attrs is not None:
+            #search for the lowest id, that will give the first FILE_NAME
+            for fn_attr in fn_attrs:
+                if fn_attr.header.id < high_attr_id:
+                    main_fn = fn_attr
+                    high_attr_id = fn_attr.header.id
+
+            ##TODO is this necessary? Maybe the first name is always the with with the biggest namespace
+            ## after we have the lowest, search for same name, but the biggest namespace
+            #for fn_attr in fn_attrs:
+            #    if main_fn.content.parent_ref == fn_attr.content.parent_ref and \
+            #        main_fn.content.parent_seq == fn_attr.content.parent_seq and \
+            #        fn_attr.content.name_type.value < main_fn.content.name_type.value:
+            #            main_fn = fn_attr
+
+        return main_fn
+
+    
     @staticmethod
     def from_bytes(data:bytes):
         return FileRecord.from_buffer(io.BytesIO(data))

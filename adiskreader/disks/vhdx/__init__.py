@@ -2,7 +2,7 @@ import io
 import copy
 from typing import List
 from adiskreader.disks.vhdx.structures.headers import Headers, VHDX_KNOWN_REGIONS, BAT, MetaDataRegion
-from functools import lru_cache
+from cachetools import cached, LRUCache
 
 class VHDXDisk:
     def __init__(self):
@@ -73,6 +73,7 @@ class VHDXDisk:
     
     async def read_block(self, block_idx:int):
         entry = self.active_bat.entries[block_idx]
+        print('Reading block %s Offset: %s State: %s' % (block_idx, entry[1], entry[0]))
         offset = entry[1]
         self.__stream.seek(offset, 0)
         data = self.__stream.read(self.active_meta.BlockSize)
@@ -94,7 +95,6 @@ class VHDXDisk:
         first_block_idx = first_lba // self.lba_per_block
         last_block_idx = last_lba // self.lba_per_block
 
-        input(f'First block: {first_block_idx}, last block: {last_block_idx}')
         # Read the blocks
         block_data = b''
         for block_idx in range(first_block_idx, last_block_idx + 1):
@@ -103,14 +103,16 @@ class VHDXDisk:
             else:
                 block_data += await self.read_block(block_idx)
 
-        # Calculate offsets within the block data
+        # Calculate the start offset
         start_offset = (first_lba % self.lba_per_block) * self.active_meta.LogicalSectorSize
-        end_offset = ((last_lba + 1) % self.lba_per_block) * self.active_meta.LogicalSectorSize
-        if end_offset == 0:
-            end_offset = None  # Handle case where last LBA is the last in a block
+
+        # Calculate the total length of data to extract
+        total_length = ((last_lba - first_lba + 1) * self.active_meta.LogicalSectorSize)
 
         # Extract and return the relevant portion of block data
-        return block_data[start_offset:end_offset]
+        print(f'Data Size: {len(block_data)} Start: {start_offset} Length: {total_length}')
+        return block_data[start_offset:start_offset + total_length]
+
 
     async def read_LBA(self, lba:int):
         if lba in self.__lba_cache:
