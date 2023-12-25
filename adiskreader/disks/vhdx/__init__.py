@@ -1,10 +1,11 @@
 import io
 import copy
 from typing import List
+from adiskreader.disks import Disk
 from adiskreader.disks.vhdx.structures.headers import Headers, VHDX_KNOWN_REGIONS, BAT, MetaDataRegion
 from cachetools import cached, LRUCache
 
-class VHDXDisk:
+class VHDXDisk(Disk):
     def __init__(self):
         self.__stream = None
         self.headers = None
@@ -62,7 +63,6 @@ class VHDXDisk:
             elif region_type == '8B7CA206-4790-4B9A-B8FE-575F050F886E':
                 self.active_meta = region
 
-        self.lba_per_block = self.active_meta.BlockSize // self.active_meta.LogicalSectorSize
         self.__lba_cache = {}
         if self.use_buffer is True:
             self.__block_cache = {}
@@ -72,8 +72,14 @@ class VHDXDisk:
         return data
     
     async def read_block(self, block_idx:int):
-        entry = self.active_bat.entries[block_idx]
-        print('Reading block %s Offset: %s State: %s' % (block_idx, entry[1], entry[0]))
+        if self.active_meta.LeaveBlockAllocated is False:
+            # this is a dynamic disk, every chunk has a bitmap
+            bitmap_block_cnt = block_idx // self.active_meta.ChunkRatio
+        else:
+            # fixed disk, it doesn't have a bitmap
+            bitmap_block_cnt = 0
+        entry = self.active_bat.entries[block_idx + bitmap_block_cnt]
+        #print('Reading block %s Offset: %s State: %s' % (block_idx, entry[1], entry[0]))
         offset = entry[1]
         self.__stream.seek(offset, 0)
         data = self.__stream.read(self.active_meta.BlockSize)
@@ -92,8 +98,8 @@ class VHDXDisk:
         # Get the range of blocks to read
         first_lba = sorted_lbas[0]
         last_lba = sorted_lbas[-1]
-        first_block_idx = first_lba // self.lba_per_block
-        last_block_idx = last_lba // self.lba_per_block
+        first_block_idx = first_lba // self.active_meta.lba_per_block
+        last_block_idx = last_lba // self.active_meta.lba_per_block
 
         # Read the blocks
         block_data = b''
@@ -104,13 +110,12 @@ class VHDXDisk:
                 block_data += await self.read_block(block_idx)
 
         # Calculate the start offset
-        start_offset = (first_lba % self.lba_per_block) * self.active_meta.LogicalSectorSize
+        start_offset = (first_lba % self.active_meta.lba_per_block) * self.active_meta.LogicalSectorSize
 
         # Calculate the total length of data to extract
         total_length = ((last_lba - first_lba + 1) * self.active_meta.LogicalSectorSize)
 
         # Extract and return the relevant portion of block data
-        print(f'Data Size: {len(block_data)} Start: {start_offset} Length: {total_length}')
         return block_data[start_offset:start_offset + total_length]
 
 
@@ -118,44 +123,13 @@ class VHDXDisk:
         if lba in self.__lba_cache:
             return self.__lba_cache[lba]
         
-        block_idx = lba // self.lba_per_block
+        block_idx = lba // self.active_meta.lba_per_block
         block = self.__block_cache.get(block_idx, None)
         if block is None:
             block = await self.read_block(block_idx)
-        offset_in_block = lba % self.lba_per_block
-        #block_idx, offset_in_block = divmod(lba, self.lba_per_block)
-        #entry = self.active_bat.entries[block_idx]
-        #offset = entry[1] * (1024*1024)  + offset_in_block * self.active_meta.LogicalSectorSize
-        #offset = entry[1] + offset_in_block * self.active_meta.LogicalSectorSize
-
+        offset_in_block = lba % self.active_meta.lba_per_block
         offset = offset_in_block * self.active_meta.LogicalSectorSize
         return self.__add_to_cache_return(lba, block[offset:offset+self.active_meta.LogicalSectorSize])
-        #print('Reading LBA {} from offset {} with state {}'.format(lba, offset, entry[0]))
-        
-        if self.use_buffer is True:
-            if len(self.__buffer) == 0:
-                await self.refresh_buffer(offset)
-                result = self.__buffer[:self.active_meta.LogicalSectorSize]
-                #print('Firstrun res: %s' % result)
-                return self.__add_to_cache_return(lba, result)
-            
-            if self.__buffer_file_offset <= offset <= self.__buffer_file_offset + len(self.__buffer):
-                if offset + self.active_meta.LogicalSectorSize <= self.__buffer_file_offset + len(self.__buffer):
-                    #print('Using buffer')
-                    corrected_offset = offset - self.__buffer_file_offset
-                    result = self.__buffer[corrected_offset: corrected_offset + self.active_meta.LogicalSectorSize]
-                    #input('Cache res: %s' % result)
-                    return self.__add_to_cache_return(lba, result)
-            await self.refresh_buffer(offset)
-            result = self.__buffer[:self.active_meta.LogicalSectorSize]
-            return self.__add_to_cache_return(lba, result)
-                
-        
-        else:
-            self.__stream.seek(offset, 0)
-            result = self.__stream.read(self.active_meta.LogicalSectorSize)
-            return self.__add_to_cache_return(lba, result)
-
-    
+        #print('Reading LBA {} from offset {} with state {}'.format(lba, offset, entry[0]))    
 
         

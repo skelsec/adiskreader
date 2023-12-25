@@ -12,7 +12,6 @@ class MBR:
 
     @staticmethod
     def from_bytes(data):
-        print(data.hex())
         return MBR.from_buffer(io.BytesIO(data))
     
     @staticmethod

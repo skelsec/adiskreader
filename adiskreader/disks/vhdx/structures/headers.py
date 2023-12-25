@@ -225,6 +225,11 @@ class MetaDataRegion:
         self.LogicalSectorSize = None
         self.PhysicalSectorSize = None
         self.VirtualDiskId = None
+        self.ChunkRatio = None
+        self.LeaveBlockAllocated = None
+        self.HasParent = None
+        self.lba_per_block = None
+
 
     @staticmethod
     def from_bytes(data:bytes):
@@ -250,6 +255,8 @@ class MetaDataRegion:
         for itype, item in region.items:
             if isinstance(item, FileParameters):
                 region.BlockSize = item.BlockSize
+                region.LeaveBlockAllocated = item.LeaveBlockAllocated
+                region.HasParent = item.HasParent
             elif isinstance(item, VirtualDiskSize):
                 region.VirtualDiskSize = item.VirtualDiskSize
             elif isinstance(item, LogicalSectorSize):
@@ -258,7 +265,10 @@ class MetaDataRegion:
                 region.PhysicalSectorSize = item.PhysicalSectorSize
             elif isinstance(item, VirtualDiskId):
                 region.VirtualDiskId = item.VirtualDiskId
-
+        
+        VHDX_MAX_SECTORS_PER_BLOCK = 1 << 23
+        region.ChunkRatio = VHDX_MAX_SECTORS_PER_BLOCK * region.LogicalSectorSize // region.BlockSize
+        region.lba_per_block = region.BlockSize // region.LogicalSectorSize
         return region
     
     def __str__(self) -> str:
@@ -547,6 +557,7 @@ class ParentLocatorEntry:
 class BAT:
     def __init__(self):
         self.entries = []
+        self.state_stats = {} # this is just for debugging purposes
     
     @staticmethod
     def from_bytes(data:bytes):
@@ -564,6 +575,7 @@ class BAT:
             offset = temp >> 20
             offset *= 1024*1024 # not sure about the multiplier
             bat.entries.append((state, offset))
+            bat.state_stats[state] = bat.state_stats.get(state, 0) + 1
         return bat
 
     def __str__(self) -> str:

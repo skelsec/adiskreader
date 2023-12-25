@@ -1,7 +1,10 @@
 import io
 import enum
-from adiskreader.filesystems.ntfs.attributes import Attribute
+from adiskreader.filesystems.ntfs.structures.attributes import Attribute, IndexEntryFlag, FILE_NAME
 
+# In NTFS everything is a filerecord (even directories), not to be confused with actual files
+# A filerecord is a header followed by a collection of attributes
+# These attributes hold the actual data of the file, or the list of files of a directory inside indices
 # https://flatcap.github.io/linux-ntfs/ntfs/concepts/file_record.html
 
 class FileRecordFlags(enum.IntFlag):
@@ -12,6 +15,8 @@ class FileRecordFlags(enum.IntFlag):
 
 
 class FileRecord:
+    # Note: Parsing a file record will only read and parse the header and the resident attributes.
+    #       Non-resident attributes must be parsed when they are needed using the `reparse` function.
     def __init__(self):
         self.signature = None
         self.usa_offset = None
@@ -29,6 +34,7 @@ class FileRecord:
         self.attributes = []
     
     def get_attribute_by_name(self, name:str):
+        """Returns all the attributes with the given name."""
         # there could be multiple attributes of the same type
         res = []
         for attr in self.attributes:
@@ -37,15 +43,13 @@ class FileRecord:
         return res
     
     def get_attribute_by_type(self, atype:int):
+        """Returns all the attributes with the given type."""
         # there could be multiple attributes of the same type
         res = []
         for attr in self.attributes:
             if attr.header.type == atype:
                 res.append(attr)
         return res
-    
-    def add_attribute(self, attr:Attribute):
-        self.attributes.append(attr)
     
     def get_main_filename_attr(self):
         '''Returns the main filename attribute of the entry.
@@ -103,29 +107,49 @@ class FileRecord:
         buff.seek(fr.attr_offset + start_pos, 0)
         while (buff.tell() - start_pos) < fr.bytes_in_use:
             attr = Attribute.from_buffer(buff)
-            fr.add_attribute(attr)
             if attr.header.type == 0xFFFFFFFF:
                 break
+            fr.attributes.append(attr)            
         
         # Seek to the end of the file record to allow for the next file record to be read
         buff.seek(start_pos, 0)
         buff.seek(fr.bytes_allocated, 1)
         return fr
 
-    @staticmethod
-    async def from_reader(reader):
-        pos = reader.tell()
-        await reader.seek(0x1C, 1)
-        bytes_allocated = int.from_bytes(await reader.read(4), 'little')
-        await reader.seek(pos, 0)
-        data = await reader.read(bytes_allocated)
-        return FileRecord.from_bytes(data)
-
+    async def reparse(self, fs, include_data = False):
+        attrs = []
+        for attr in self.attributes:
+            tattr = await attr.header.reparse(fs, include_data= include_data)
+            attrs.append(tattr)
+        self.attributes = attrs
     
+    async def list_directory(self):
+        dir_indices = []
+        for attr in self.get_attribute_by_name('$I30'):
+            if attr.header.type == 0x90:
+                for index in attr.index_entries:
+                    if index.stream is not None:
+                        fn = FILE_NAME.from_bytes(index.stream)
+                        yield index, fn
+                    #if index.sub_node_ref is not None:
+                    #    input('SUBNODE: %s ' % index.sub_node_ref)
+                    #    #raise Exception('Sub node ref not implemented')
+            elif attr.header.type == 0xA0:
+                for record in attr.index_records:
+                    for index in record.entries:
+                        if index.stream is not None:
+                            fn = FILE_NAME.from_bytes(index.stream)
+                            yield index, fn
+
     @staticmethod
-    async def from_filesystem(fs, start_cluster):
-        reader = fs.get_cluster_reader(start_cluster)
-        return await FileRecord.from_reader(reader)
+    async def determine_allocation_size(fs, start_cluster):
+        # When parsing the filesystem, there is no way to know the size of the file record
+        # This function will read the start cluster, and determine the size of the file record
+        recbuff = io.BytesIO()
+        data = await fs.read_cluster(start_cluster)
+        recbuff.write(data)
+        recbuff.seek(0x1C, 0)
+        return int.from_bytes(recbuff.read(4), 'little')
     
     def __str__(self):
         res = []
@@ -145,5 +169,8 @@ class FileRecord:
         res.append('Record Number: {}'.format(self.record_number))
         res.append('Attributes:')
         for attr in self.attributes:
-            res.append(str(attr))
+            res.append('---- ATTR START ----')
+            for line in str(attr).split('\n'):
+                res.append('  {}'.format(line))
+            res.append('---- ATTR END ----')
         return '\n'.join(res)
