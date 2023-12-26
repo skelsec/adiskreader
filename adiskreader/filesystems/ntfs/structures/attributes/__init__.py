@@ -75,8 +75,6 @@ class AttributeHeader:
         
         buff.seek(0,0)
         self.data = buff.read()
-        print('Reparse: %s' % hex(self.type))
-        input(self.data)
         return NTFS_ATTR_TYPE_MAP[self.type].from_header(self)
     
     @staticmethod

@@ -65,7 +65,6 @@ class MFT:
             async for idx, fn in inode.list_directory():
                 if fn.name == part:
                     temppart.append(part)
-                    input(temppart)
                     inode = await self.get_inode(idx.file_ref)
                     break
             else:
@@ -127,39 +126,6 @@ class MFT:
             break
         
         self.mftdata.seek(0, 0)
-
-        async for dirname in self.list_directory('Windows\\System32'):
-            print(dirname)
-        
-        input('Dirlist done')
-
-        filerecord = await self.find_path('Windows\\System32\\config\\SAM')
-        input(filerecord)
-        dataattr = filerecord.get_attribute_by_type(0x80)[0]
-        async for chunk in dataattr.header.read_attribute_data(self.__fs):
-            input(chunk)
-
-
-
-
-        #root = await self.get_inode(5)
-        #print('++++++++++++++++++++++++++++++++++++')
-        #async for dirname in root.list_directory():
-        #    print(dirname)
-        #    input()
-        #input(root)
-        
-        #for i in range(1000, 100000000, 1):
-        #    inode = await self.get_inode(i)
-        #    fname = inode.get_main_filename_attr()
-        #    if fname is None:
-        #        continue
-        #    await self.resolve_full_path(inode)
-            
-        #root = self.inodes[5]
-        #print('++++++++++++++++++++++++++++++++++++')
-        #input(root)
-        #await self.resolve_full_path(None)
 
     @staticmethod
     async def from_filesystem(fs, start_cluster):
