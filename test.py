@@ -35,6 +35,14 @@ async def amain():
     file_fulldata = file.read()
     if fs_fulldata != file_fulldata:
         print('Mismatch at full file')
+        i = 0
+        while i < len(fs_fulldata):
+            if fs_fulldata[i] != file_fulldata[i]:
+                print('Mismatch at offset %s' % i)
+                print(fs_fulldata[i:i+0x100])
+                print(file_fulldata[i:i+0x100])
+                break
+            i += 1
         #print(fs_fulldata)
         #print(file_fulldata)
         raise Exception('Mismatch')

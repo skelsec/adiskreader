@@ -266,8 +266,8 @@ class MetaDataRegion:
             elif isinstance(item, VirtualDiskId):
                 region.VirtualDiskId = item.VirtualDiskId
         
-        VHDX_MAX_SECTORS_PER_BLOCK = 1 << 23
-        region.ChunkRatio = VHDX_MAX_SECTORS_PER_BLOCK * region.LogicalSectorSize // region.BlockSize
+        VHDX_MAX_SECTORS_PER_BLOCK = 2**23
+        region.ChunkRatio = (VHDX_MAX_SECTORS_PER_BLOCK * region.LogicalSectorSize) // region.BlockSize
         region.lba_per_block = region.BlockSize // region.LogicalSectorSize
         return region
     

@@ -109,7 +109,7 @@ class NTFSFile:
                     break
             
             else:
-                async for data in self.__fs.read_sequential_clusters(run_offset, run_length):
+                async for data in self.__fs.read_sequential_clusters(run_offset, run_length, debug = True):
                     buff.write(data)
                     if buff.tell() + start_offset_pos >= size:
                         break
@@ -120,6 +120,8 @@ class NTFSFile:
 
     async def setup(self):
         # parse the data attribute
+        fsize = self.__fr.get_attribute_by_type(0x30)[1]
+        input(fsize)
         self.__dataattr = self.__fr.get_attribute_by_type(0x80)[0]
         if self.__dataattr.header.non_resident is False:
             self.__buffer.write(self.__dataattr.header.data)
@@ -195,24 +197,35 @@ class NTFS(FileSystem):
         
         data = await self.__disk.read_LBAs(lba_indices)
         return data[:self.cluster_size]
-    
-    async def read_sequential_clusters(self, cluster_idx, cnt, batch_size=10*1024*1024):
+      
+    async def read_sequential_clusters(self, cluster_idx, cnt, batch_size=10*1024*1024, debug = False):
         lba_indices = []
         total_sectors = self.pbs.sectors_per_cluster * cnt
 
+        test_data = b''
         requested_size = 0
         for i in range(total_sectors):
             requested_size += self.pbs.sectors_per_cluster * self.pbs.bytes_per_sector
             lba = self.__start_lba + (cluster_idx * self.pbs.sectors_per_cluster) + i
+            if debug is True:
+                print('Reading LBA: %s' % lba)
+                test_data = await self.__disk.read_LBA(lba)
+                if test_data.find(b'XZY') != -1:
+                    print('Found XZY')
+                    print(test_data)
+                    input()
+                yield test_data
+                continue
             lba_indices.append(lba)
-
+    
             if requested_size >= batch_size:
-                yield await self.__disk.read_LBAs(lba_indices)
+                data = await self.__disk.read_LBAs(lba_indices, debug = debug)
+                yield data
                 requested_size = 0
                 lba_indices = []
-
+    
         if lba_indices:
-            yield await self.__disk.read_LBAs(lba_indices)
+            yield await self.__disk.read_LBAs(lba_indices, debug = debug)
     
 
     async def ls(self, path:str):

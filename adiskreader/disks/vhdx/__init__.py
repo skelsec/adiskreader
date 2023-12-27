@@ -1,5 +1,6 @@
 import io
 import copy
+import math
 from typing import List
 from adiskreader.disks import Disk
 from adiskreader.disks.vhdx.structures.headers import Headers, VHDX_KNOWN_REGIONS, BAT, MetaDataRegion
@@ -78,7 +79,11 @@ class VHDXDisk(Disk):
         else:
             # fixed disk, it doesn't have a bitmap
             bitmap_block_cnt = 0
+        
         entry = self.active_bat.entries[block_idx + bitmap_block_cnt]
+        if entry[0] != 6:
+            print('Block %s is not allocated' % block_idx)
+            return b'\x00' * self.active_meta.BlockSize
         #print('Reading block %s Offset: %s State: %s' % (block_idx, entry[1], entry[0]))
         offset = entry[1]
         self.__stream.seek(offset, 0)
@@ -87,8 +92,8 @@ class VHDXDisk(Disk):
             self.__block_cache[block_idx] = data
         return data
 
-    async def read_LBAs(self, lbas:List[int]):
-        #print(f'Reading LBAs: {lbas}')
+    async def read_LBAs(self, lbas:List[int], debug = False):
+        #input(f'Reading LBAs: {lbas}')
 
         # Check if LBAs are contiguous
         sorted_lbas = sorted(lbas)
@@ -98,25 +103,49 @@ class VHDXDisk(Disk):
         # Get the range of blocks to read
         first_lba = sorted_lbas[0]
         last_lba = sorted_lbas[-1]
-        first_block_idx = first_lba // self.active_meta.lba_per_block
-        last_block_idx = last_lba // self.active_meta.lba_per_block
+        #first_block_idx = first_lba // self.active_meta.lba_per_block
+        #last_block_idx = last_lba // self.active_meta.lba_per_block
+
+        first_block_idx = math.floor(first_lba / self.active_meta.lba_per_block)
+        last_block_idx = math.ceil(last_lba / self.active_meta.lba_per_block)
+
+        if debug:
+            print(f'first_lba: {first_lba}')
+            print(f'last_lba: {last_lba}')
+            print(f'first_block_idx: {first_block_idx}')
+            print(f'last_block_idx: {last_block_idx}')
 
         # Read the blocks
-        block_data = b''
+        block_data = io.BytesIO()
         for block_idx in range(first_block_idx, last_block_idx + 1):
             if block_idx in self.__block_cache:
-                block_data += self.__block_cache[block_idx]
+                if debug:
+                    print(f'Using block cache for block {block_idx}')
+                temp = self.__block_cache[block_idx]
+                block_data.write(temp)
             else:
-                block_data += await self.read_block(block_idx)
+                if debug:
+                    print(f'Reading block {block_idx}')
+                temp = await self.read_block(block_idx)
+                block_data.write(temp)
 
         # Calculate the start offset
-        start_offset = (first_lba % self.active_meta.lba_per_block) * self.active_meta.LogicalSectorSize
+        start_block_lba = first_block_idx * self.active_meta.lba_per_block
+        start_offset = (first_lba - start_block_lba) * self.active_meta.LogicalSectorSize
+        #(first_lba % self.active_meta.lba_per_block) * self.active_meta.LogicalSectorSize
 
         # Calculate the total length of data to extract
         total_length = ((last_lba - first_lba + 1) * self.active_meta.LogicalSectorSize)
 
+        if debug:
+            print(f'start_block_lba: {start_block_lba}')
+            print(f'start_offset: {start_offset}')
+            print(f'total_length: {total_length}')
+            input()
+
         # Extract and return the relevant portion of block data
-        return block_data[start_offset:start_offset + total_length]
+        block_data.seek(start_offset, 0)
+        return block_data.read(total_length)
 
 
     async def read_LBA(self, lba:int):

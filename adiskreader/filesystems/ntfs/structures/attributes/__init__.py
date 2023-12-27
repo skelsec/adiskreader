@@ -235,11 +235,10 @@ class NonResidentAttribute(AttributeHeader):
                 relative_run_offset = int.from_bytes(buffer.read(offset_length), 'little', signed=True)
                 # Convert to absolute offset
                 current_cluster += relative_run_offset
+                attr.data_runs.append((current_cluster, run_length))
             else:
                 # Sparse run, don't update current_cluster
-                current_cluster = 0  # Reset current cluster for sparse run
-
-            attr.data_runs.append((current_cluster, run_length))
+                attr.data_runs.append((0, run_length))
         
         return attr
 
