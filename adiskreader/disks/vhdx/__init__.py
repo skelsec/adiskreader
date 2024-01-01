@@ -13,7 +13,6 @@ class VHDXDisk(Disk):
         self.active_region = None
         self.active_meta:MetaDataRegion = None
         self.active_bat:BAT = None
-        self.boot_record = None
         self.lba_per_block = None
         self.use_buffer = True
         self.__lba_cache = {}
@@ -90,6 +89,8 @@ class VHDXDisk(Disk):
         data = self.__stream.read(self.active_meta.BlockSize)
         if self.use_buffer is True:
             self.__block_cache[block_idx] = data
+        if len(data) != self.active_meta.BlockSize:
+            raise Exception('Block size mismatch')
         return data
 
     async def read_LBAs(self, lbas:List[int], debug = False):
@@ -129,9 +130,13 @@ class VHDXDisk(Disk):
                 temp = await self.read_block(block_idx)
                 block_data.write(temp)
 
+        if (last_block_idx - first_block_idx) > 1:
+            print('Multiple blocks read')
         # Calculate the start offset
         start_block_lba = first_block_idx * self.active_meta.lba_per_block
         start_offset = (first_lba - start_block_lba) * self.active_meta.LogicalSectorSize
+        #print('First LBA: {} Start block: {}'.format(first_lba, first_block_idx))
+        #input('Read block {} Start offset: {}'.format(first_block_idx, start_offset))
         #(first_lba % self.active_meta.lba_per_block) * self.active_meta.LogicalSectorSize
 
         # Calculate the total length of data to extract

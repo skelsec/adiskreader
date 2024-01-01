@@ -1,6 +1,5 @@
 import io
-import enum
-import uuid
+import zlib
 from adiskreader.filesystems.ntfs.structures.attributes import Attribute
 
 class DATA(Attribute):
@@ -27,5 +26,7 @@ class DATA(Attribute):
     def __str__(self):
         res = []
         res.append('Data')
+        res.append('Header: {}'.format(self.header))
         res.append('Data: {}'.format(self.data))
         return '\n'.join(res)
+    

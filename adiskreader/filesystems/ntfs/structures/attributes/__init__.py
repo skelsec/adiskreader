@@ -1,13 +1,15 @@
 import io
+import enum
+
+class AttributeHeaderFlag(enum.IntFlag):
+    NONE = 0x00
+    COMPRESSED = 0x0001
+    ENCRYPTED = 0x4000
+    SPARSE = 0x8000
 
 class Attribute:
     def __init__(self):
         self.header = None
-    
-    @staticmethod
-    async def from_reader(reader, header = None):
-        header = await AttributeHeader.from_reader(reader)
-        return NTFS_ATTR_TYPE_MAP[header.type].from_header(header)
     
     @staticmethod
     def from_bytes(data:bytes):
@@ -41,27 +43,6 @@ class AttributeHeader:
         self.name_offset = None
         self.flags = None
         self.id = None
-    
-    @staticmethod
-    async def from_reader(reader):
-        temp = await reader.read(8)
-        header = AttributeHeader()
-        header.type = int.from_bytes(temp[0:4], 'little')
-        header.length = int.from_bytes(temp[4:8], 'little')
-        data = await reader.read(header.length - 8)
-        buff = io.BytesIO(temp + data)
-        buff.seek(8,0)
-        header.non_resident = bool(int.from_bytes(buff.read(1), 'little'))
-        header.name_length = int.from_bytes(buff.read(1), 'little')
-        header.name_offset = int.from_bytes(buff.read(2), 'little')
-        header.flags = int.from_bytes(buff.read(2), 'little')
-        header.id = int.from_bytes(buff.read(2), 'little')
-        if header.non_resident is False:
-            header = ResidentAttribute.from_header(header, buff)
-        else:
-            header = NonResidentAttribute.from_header(header, buff)
-        
-        return header
 
     async def reparse(self, fs, include_data = False):
         # Reparse the attribute by reading data run references and re-reading the attribute
@@ -93,7 +74,7 @@ class AttributeHeader:
         header.non_resident = bool(int.from_bytes(buff.read(1), 'little'))
         header.name_length = int.from_bytes(buff.read(1), 'little')
         header.name_offset = int.from_bytes(buff.read(2), 'little')
-        header.flags = int.from_bytes(buff.read(2), 'little')
+        header.flags = AttributeHeaderFlag(int.from_bytes(buff.read(2), 'little'))
         header.id = int.from_bytes(buff.read(2), 'little')
         if header.non_resident is False:
             header = ResidentAttribute.from_header(header, buff)
@@ -109,7 +90,7 @@ class ResidentAttribute(AttributeHeader):
         self.attr_offset = None
         self.indexed_flag = None
         self.padding = None
-        self.name = None
+        self.name = ''
         self.data = None
     
     @staticmethod
@@ -169,9 +150,10 @@ class NonResidentAttribute(AttributeHeader):
         self.alloc_size = None
         self.real_size = None
         self.init_size = None
-        self.name = None
+        self.name = ''
         self.data = None
         self.data_runs = []
+        self.data_run_raw = []
     
     def __str__(self):
         res = []
@@ -222,32 +204,35 @@ class NonResidentAttribute(AttributeHeader):
         buffer.seek(attr.runlist_offset, 0)  # Relative seek to the runlist
         current_cluster = 0  # Start at the beginning of the file
         while True:
-            first_byte = int.from_bytes(buffer.read(1), 'little')
+            raw = b''
+            first_byte_raw = buffer.read(1)
+            raw += first_byte_raw
+            first_byte = int.from_bytes(first_byte_raw, 'little')
+            
             if first_byte == 0:
                 break  # End of data run
 
             len_length = first_byte & 0x0F
             offset_length = (first_byte >> 4) & 0x0F
-
-            run_length = int.from_bytes(buffer.read(len_length), 'little')
+            
+            run_length_raw = buffer.read(len_length)
+            raw += run_length_raw
+            run_length = int.from_bytes(run_length_raw, 'little')
             if offset_length > 0:
                 # Read the run offset (relative offset)
-                relative_run_offset = int.from_bytes(buffer.read(offset_length), 'little', signed=True)
+                relative_run_offset_raw = buffer.read(offset_length)
+                raw += relative_run_offset_raw
+                relative_run_offset = int.from_bytes(relative_run_offset_raw, 'little', signed=True)
                 # Convert to absolute offset
                 current_cluster += relative_run_offset
                 attr.data_runs.append((current_cluster, run_length))
             else:
                 # Sparse run, don't update current_cluster
                 attr.data_runs.append((0, run_length))
+            
+            attr.data_run_raw.append(raw)
         
         return attr
-
-    async def get_data_size(self, fs):
-        """Calculates the size of the data using data run references and a fs."""
-        size = 0
-        for run_offset, run_length in self.data_runs:
-            size += run_length * fs.cluster_size
-        return size
 
     async def read_attribute_data(self, fs):
         """Reads the actual data using data run references and a fs."""

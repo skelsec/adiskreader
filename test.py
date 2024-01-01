@@ -39,8 +39,8 @@ async def amain():
         while i < len(fs_fulldata):
             if fs_fulldata[i] != file_fulldata[i]:
                 print('Mismatch at offset %s' % i)
-                print(fs_fulldata[i:i+0x100])
-                print(file_fulldata[i:i+0x100])
+                print(fs_fulldata[i:i+0x1000])
+                print(file_fulldata[i:i+0x1000])
                 break
             i += 1
         #print(fs_fulldata)

@@ -27,6 +27,16 @@ class PBS:
         self.unused8 = None
         self.boot_code = None
         self.boot_sector_signature = None
+
+    def get_filerecord_size_bytes(self):
+        if self.bytes_per_record < 0:
+            return 1 << abs(self.bytes_per_record)
+        return self.bytes_per_record * self.sectors_per_cluster * self.bytes_per_sector
+
+    def get_index_buffer_size_bytes(self):
+        if self.bytes_per_index_buffer < 0:
+            return 1 << abs(self.bytes_per_index_buffer)
+        return self.bytes_per_index_buffer * self.sectors_per_cluster * self.bytes_per_sector
     
     @staticmethod
     def from_bytes(data):
@@ -55,9 +65,9 @@ class PBS:
         pbs.total_sectors = int.from_bytes(buff.read(8), 'little')
         pbs.mft_cluster = int.from_bytes(buff.read(8), 'little')
         pbs.mft_cluster_mirror = int.from_bytes(buff.read(8), 'little')
-        pbs.bytes_per_record = int.from_bytes(buff.read(1), 'little')
+        pbs.bytes_per_record = int.from_bytes(buff.read(1), 'little', signed=True)
         pbs.unused6 = int.from_bytes(buff.read(3), 'little')
-        pbs.bytes_per_index_buffer = int.from_bytes(buff.read(1), 'little')
+        pbs.bytes_per_index_buffer = int.from_bytes(buff.read(1), 'little', signed=True)
         pbs.unused7 = int.from_bytes(buff.read(3), 'little')
         pbs.volume_serial_number = int.from_bytes(buff.read(8), 'little')
         pbs.unused8 = buff.read(4)

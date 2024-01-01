@@ -30,7 +30,11 @@ class INDEX_ROOT(Attribute):
         si.attribute_type = int.from_bytes(buff.read(4), 'little')
         si.collation_rule = int.from_bytes(buff.read(4), 'little')
         si.bytes_per_record = int.from_bytes(buff.read(4), 'little')
-        si.clusters_per_index_record = int.from_bytes(buff.read(1), 'little')
+        si.clusters_per_index_record = int.from_bytes(buff.read(1), 'little', signed=True)
+        if si.clusters_per_index_record < 0:
+            si.clusters_per_index_record = 1 << abs(si.clusters_per_index_record)
+        else:
+            si.clusters_per_index_record *= si.bytes_per_record
         si.padding = int.from_bytes(buff.read(3), 'little')
         hdrpos = buff.tell()
         si.index_header = IndexHeader.from_buffer(buff)
@@ -71,44 +75,25 @@ class INDEX_ALLOCATION(Attribute):
     
     @staticmethod
     def from_header(header):
-        si = INDEX_ALLOCATION.from_bytes(header.data)
-        si.header = header
-        return si
-
-    @staticmethod
-    def from_bytes(data):
-        return INDEX_ALLOCATION.from_buffer(io.BytesIO(data))
-    
-    @staticmethod
-    def from_buffer(buff):
-        pos = buff.tell()
-        test_data = buff.read()
-        size = buff.tell()
-        buff.seek(pos, 0)
-
-        # PROBLEM: The size of one index record is not always 4096 bytes
-        # The actual size of the record is marked in a different attribute
-        # The size of an Index Record is defined in the Index Root and is 4 kB by default.
-        index_record_allocation_size = 4096
         si = INDEX_ALLOCATION()
-        while buff.tell() < size:
-            try:
-                ir = IndexRecord.from_buffer(buff)
-                si.index_records.append(ir)
-                # pad to 4 kB
-                if buff.tell() % index_record_allocation_size != 0:
-                    buff.seek(index_record_allocation_size - (buff.tell() % index_record_allocation_size), 1)
-            except:
-                print('------ ERRR -------')
-                print(test_data[0:200])
-                print('------ last chunk -----')
-                print(buff.read()[0:200])
-                print(buff.tell())
-                print(size)
-                break
-                #raise
-        
+        si.header = header
+        # not parsing data here because we need the index record size
+        # this must be obtained from the INDEX_ROOT attribute
         return si
+    
+    def read_indicies(self, index_record_size):
+        buffer = io.BytesIO(self.header.data)
+        buffer.seek(0, 0)
+        while buffer.tell() < self.header.real_size:
+            recdata = buffer.read(index_record_size)
+            if recdata == b'\x00' * index_record_size:
+                # empty index record
+                continue
+            if recdata == b'':
+                # end of data
+                break
+            ir = IndexRecord.from_bytes(recdata)
+            yield ir
     
     def __str__(self):
         res = []
@@ -116,7 +101,6 @@ class INDEX_ALLOCATION(Attribute):
         for index in self.index_records:
             res.append(str(index))
         return '\n'.join(res)
-
 
 
 class IndexRecord:
@@ -141,7 +125,7 @@ class IndexRecord:
         ir.magic = buff.read(4)
         if ir.magic != b'INDX':
             ##### DEBUGGING #####
-            print('------ ERRR -------')
+            print('------ ERRR (IndexRecord) -------')
             buff.seek(-16, 1)
             print(buff.read()[0:400])
             print(buff.tell())
@@ -160,6 +144,7 @@ class IndexRecord:
         
         buff.seek(hdrpos + ir.index_header.first_entry_offset, 0)
         while buff.tell() < hdrpos + ir.index_header.first_entry_offset + ir.index_header.index_length:
+        #while True:
             entry = IndexEntry.from_buffer(buff)
             ir.entries.append(entry)
             if IndexEntryFlag.LAST_ENTRY in entry.flags:
@@ -210,8 +195,8 @@ class IndexEntry:
 
         if IndexEntryFlag.SUB_NODE in ie.flags:
             buff.seek(pos + ie.entry_length - 8, 0)
-            ie.sub_node_ref = int.from_bytes(buff.read(8), 'little')
-            #ie.sub_node_seq = int.from_bytes(buff.read(2), 'little')
+            ie.sub_node_ref = int.from_bytes(buff.read(6), 'little')
+            ie.sub_node_seq = int.from_bytes(buff.read(2), 'little')
             buff.seek(streamstart, 0)
 
         if IndexEntryFlag.LAST_ENTRY not in ie.flags:

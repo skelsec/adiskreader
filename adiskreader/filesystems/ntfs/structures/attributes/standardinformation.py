@@ -1,14 +1,40 @@
 import io
+import enum
+import datetime
 from adiskreader.filesystems.ntfs.structures.attributes import Attribute
+from adiskreader.utils import filetime_to_dt
+
+
+class SIFlag(enum.IntFlag):
+    READ_ONLY = 0x00000001
+    HIDDEN = 0x00000002
+    SYSTEM = 0x00000004
+    DIRECTORY = 0x00000010
+    ARCHIVE = 0x00000020
+    DEVICE = 0x00000040
+    NORMAL = 0x00000080
+    TEMPORARY = 0x00000100
+    SPARSE_FILE = 0x00000200
+    REPARSE_POINT = 0x00000400
+    COMPRESSED = 0x00000800
+    OFFLINE = 0x00001000
+    NOT_CONTENT_INDEXED = 0x00002000
+    ENCRYPTED = 0x00004000
+    INTEGRITY_STREAM = 0x00008000
+    VIRTUAL = 0x00010000
+    NO_SCRUB_DATA = 0x00020000
+    RECALL_ON_OPEN = 0x00040000
+    RECALL_ON_DATA_ACCESS = 0x00400000
+    TXF = 0x80000000
 
 class STANDARD_INFORMATION(Attribute):
     def __init__(self):
         super().__init__()
-        self.time_created = None
-        self.time_modified = None
-        self.time_mft_modified = None
-        self.time_accessed = None
-        self.flags = None
+        self.time_created:datetime.datetime = None
+        self.time_modified:datetime.datetime = None
+        self.time_mft_modified:datetime.datetime = None
+        self.time_accessed:datetime.datetime = None
+        self.flags:SIFlag = None
         self.maximum_versions = None
         self.version = None
         self.classid = None
@@ -30,11 +56,11 @@ class STANDARD_INFORMATION(Attribute):
     @staticmethod
     def from_buffer(buff):
         si = STANDARD_INFORMATION()
-        si.time_created = int.from_bytes(buff.read(8), 'little')
-        si.time_modified = int.from_bytes(buff.read(8), 'little')
-        si.time_mft_modified = int.from_bytes(buff.read(8), 'little')
-        si.time_accessed = int.from_bytes(buff.read(8), 'little')
-        si.flags = int.from_bytes(buff.read(4), 'little')
+        si.time_created  = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
+        si.time_modified = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
+        si.time_mft_modified = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
+        si.time_accessed = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
+        si.flags = SIFlag(int.from_bytes(buff.read(4), 'little'))
         si.maximum_versions = int.from_bytes(buff.read(4), 'little')
         si.version = int.from_bytes(buff.read(4), 'little')
         si.classid = int.from_bytes(buff.read(4), 'little')

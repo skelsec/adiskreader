@@ -1,25 +1,27 @@
 import io
 import enum
 import uuid
+from adiskreader.utils import filetime_to_dt
 from adiskreader.filesystems.ntfs.structures.attributes import Attribute
+import datetime
 
 
 class FILE_NAME(Attribute):
     def __init__(self):
         super().__init__()
-        self.parent_ref = None
-        self.parent_seq = None
-        self.time_created = None
-        self.time_modified = None
-        self.time_mft_modified = None
-        self.time_accessed = None
-        self.allocated_size = None
-        self.real_size = None
-        self.flags = None
-        self.reparse_value = None
-        self.name_length = None
+        self.parent_ref:int = None
+        self.parent_seq:int = None
+        self.time_created:datetime.datetime = None
+        self.time_modified:datetime.datetime = None
+        self.time_mft_modified:datetime.datetime = None
+        self.time_accessed:datetime.datetime = None
+        self.allocated_size:int = None
+        self.real_size:int = None
+        self.flags:FileNameFlag = None
+        self.reparse_value:int = None
+        self.name_length:int = None
         self.namespace = None
-        self.name = None
+        self.name:str = None
 
     @staticmethod
     def from_header(header):
@@ -36,10 +38,10 @@ class FILE_NAME(Attribute):
         si = FILE_NAME()
         si.parent_ref = int.from_bytes(buff.read(6), 'little')
         si.parent_seq = int.from_bytes(buff.read(2), 'little')
-        si.time_created = int.from_bytes(buff.read(8), 'little')
-        si.time_modified = int.from_bytes(buff.read(8), 'little')
-        si.time_mft_modified = int.from_bytes(buff.read(8), 'little')
-        si.time_accessed = int.from_bytes(buff.read(8), 'little')
+        si.time_created   = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
+        si.time_modified  = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
+        si.time_mft_modified = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
+        si.time_accessed  = filetime_to_dt(int.from_bytes(buff.read(8), 'little'))
         si.allocated_size = int.from_bytes(buff.read(8), 'little')
         si.real_size = int.from_bytes(buff.read(8), 'little')
         si.flags = FileNameFlag(int.from_bytes(buff.read(4), 'little'))

@@ -1,22 +1,25 @@
 import io
-import traceback
+
+from cachetools import LRUCache
 from adiskreader.filesystems.ntfs.structures.filerecord import FileRecord
-from tqdm import tqdm
+from adiskreader.filesystems.ntfs.structures.file import NTFSFile
+
 
 # MFT is a special file record that contains the list of all other file records on the filesystem
-
 class MFT:
-    def __init__(self, fs, start_cluster):
+    def __init__(self, fs, start_cluster, inode = 0):
         self.__fs = fs
+        self.__inode = inode
         self.__start_cluster = start_cluster
         self.__record_size = None
         self.__root_ref = 5 #this should be constant
+        self.__inode_cache = LRUCache(maxsize=1000)
         self.record:FileRecord = None
         self.mftdata = io.BytesIO()
 
     async def setup(self):
         # file record allocation size is unknown at this point
-        self.__record_size = await FileRecord.determine_allocation_size(self.__fs, self.__start_cluster)
+        self.__record_size = self.__fs.pbs.get_filerecord_size_bytes()
 
         # file record size can be smaller than the cluster size
         # reding the MFT file record here
@@ -27,27 +30,40 @@ class MFT:
         recdata.seek(0, 0)
 
         # parse the MFT file record
-        self.record = FileRecord.from_buffer(recdata)
+        self.record = FileRecord.from_buffer(recdata, self.__fs, self.__inode)
+        self.file = NTFSFile(self.__fs, self.record)
+        await self.file.setup()
 
-        data = b''
-        bytes_allocated = -1
-        for dataattr in self.record.get_attribute_by_type(0x80):
-            datasize = await dataattr.header.get_data_size(self.__fs)
-            pbar = tqdm(total=datasize, unit='B', unit_scale=True)
-            async for chunk in dataattr.header.read_attribute_data(self.__fs):
-                self.mftdata.write(chunk)
-                pbar.update(len(chunk))
-                
-            pbar.close()
-            break
-        
-        self.mftdata.seek(0, 0)
+        #async for dataattr in self.record.get_attribute_by_type(0x80, self):
+        #    pbar = tqdm(total=dataattr.header.real_size, unit='B', unit_scale=True)
+        #    async for chunk in dataattr.header.read_attribute_data(self.__fs):
+        #        self.mftdata.write(chunk)
+        #        pbar.update(len(chunk))
+        #        
+        #    pbar.close()
+        #    break
+        #
+        #self.mftdata.seek(0, 0)
 
     async def get_inode(self, ref):
         # retrieve the inode from the MFT with all attributes resolved, except the data attribute
-        self.mftdata.seek(ref * self.__record_size, 0)
-        fr = FileRecord.from_buffer(self.mftdata)
+        #self.mftdata.seek(ref * self.__record_size, 0)
+        #frdata = self.mftdata.read(self.__record_size)
+        #if frdata == b'\x00' * self.__record_size:
+        #    return None
+        #input(frdata)
+        #fr = FileRecord.from_bytes(frdata)
+        #await fr.reparse(self.__fs)
+        #return fr
+        if ref in self.__inode_cache:
+            return self.__inode_cache[ref]
+        await self.file.seek(ref * self.__record_size, 0)
+        frdata = await self.file.read(self.__record_size)
+        if frdata == b'\x00' * self.__record_size:
+            return None
+        fr = FileRecord.from_bytes(frdata, self.__fs, ref)
         await fr.reparse(self.__fs)
+        self.__inode_cache[ref] = fr
         return fr
     
     async def find_path(self, path):
@@ -57,6 +73,11 @@ class MFT:
             parts = parts[1:]
         if parts[-1] == '':
             parts = parts[:-1]
+        
+        # removing datastream name
+        m = parts[-1].find(':')
+        if m != -1:
+            parts[-1] = parts[-1][:m]
         
         # start at root
         inode = await self.get_inode(5)
@@ -109,23 +130,8 @@ class MFT:
             paths.append(current_file_attr.name)
         
         full_path = '\\'.join(reversed(paths))
-        input(full_path)
+        #input(full_path)
         #input(self.inodes[ref].get_attribute_by_type(0x30)[0].name)
-
-    async def parse(self):        
-        data = b''
-        bytes_allocated = -1
-        for dataattr in self.record.get_attribute_by_type(0x80):
-            datasize = await dataattr.header.get_data_size(self.__fs)
-            pbar = tqdm(total=datasize, unit='B', unit_scale=True)
-            async for chunk in dataattr.header.read_attribute_data(self.__fs):
-                self.mftdata.write(chunk)
-                pbar.update(len(chunk))
-                
-            pbar.close()
-            break
-        
-        self.mftdata.seek(0, 0)
 
     @staticmethod
     async def from_filesystem(fs, start_cluster):

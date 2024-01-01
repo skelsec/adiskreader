@@ -48,6 +48,7 @@ class Partitions:
             self.boot_record = await GPT.from_disk(self.disk)
         else:
             if len(self.boot_record.partition_table) == 1 and self.boot_record.partition_table[0].partition_type == b'\xEE':
+                # Fake (but valid) MBR, read GPT instead
                 self.boot_record = await GPT.from_disk(self.disk)
         
     
