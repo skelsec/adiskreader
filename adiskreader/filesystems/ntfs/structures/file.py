@@ -135,7 +135,7 @@ class NTFSFile:
                     break
             
             else:
-                print('Reading at offset: %s length: %s' % (run_offset, run_length))
+                #print('Reading at offset: %s length: %s' % (run_offset, run_length))
                 async for data in self.__fs.read_sequential_clusters(run_offset, run_length): #debug = True
                     buff.write(data)
                     if buff.tell() + start_offset_pos >= size:

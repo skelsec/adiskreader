@@ -8,6 +8,12 @@ class Partition:
         self.end_LBA = None
         self.size = None
         self.PartitionName = None
+        self.PartitionTypeName = ''
+    
+    async def guess_filesystem(self, disk):
+        first_lba = await disk.read_LBA(self.start_LBA)
+        print(first_lba)
+
 
     @staticmethod
     def from_raw_partition(disk, raw_partition):
@@ -27,12 +33,13 @@ class Partition:
             part.end_LBA = raw_partition.LastLBA
             part.size = raw_partition.LastLBA - raw_partition.FirstLBA
             part.PartitionName = raw_partition.PartitionName
+            part.PartitionTypeName = raw_partition.PartitionType
             return part
         else:
             raise Exception('Unknown partition type')
     
     def __str__(self):
-        return 'Partition: {} - {} ({} sectors)'.format(self.start_LBA, self.end_LBA, self.size)
+        return 'Partition: {} - {} ({} sectors) {} {}'.format(self.start_LBA, self.end_LBA, self.size, self.PartitionName, self.PartitionTypeName)
 
 class Partitions:
     def __init__(self, disk):

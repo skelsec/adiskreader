@@ -16,6 +16,6 @@ class FileSystem:
     async def ls(self, path:str):
         raise NotImplementedError()
     
-    async def open(self, path:str):
+    async def open(self, path:str, mode:str = 'rb'):
         raise NotImplementedError()
     

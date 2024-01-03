@@ -36,6 +36,7 @@ class FileRecord:
         self.next_attr_id = None
         self.record_number = None
         self.attributes = []
+        self.update_seq = []
     
     async def get_attribute_by_name(self, name:str):
         """Returns all the attributes with the given name."""
@@ -156,13 +157,38 @@ class FileRecord:
         fr.base_record = int.from_bytes(buff.read(8), 'little')
         fr.next_attr_id = int.from_bytes(buff.read(2), 'little')
         fr.record_number = int.from_bytes(buff.read(2), 'little')
+
+        # http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/concepts/fixup.html
+        buff.seek(fr.usa_offset + start_pos, 0)
+        for _ in range(fr.usa_count):
+            x = buff.read(2)
+            if x != b'\x00\x00':
+                fr.update_seq.append(x)
         
-        buff.seek(fr.attr_offset + start_pos, 0)
-        while (buff.tell() - start_pos) < fr.bytes_in_use:
-            attr = Attribute.from_buffer(buff)
-            if attr.header.type == 0xFFFFFFFF:
-                break
-            fr.attributes.append(attr)            
+        buff.seek(start_pos, 0)
+        for actual_data in fr.update_seq[1:]:
+            buff.seek(fs.pbs.bytes_per_sector - 2, 1)
+            checksum = buff.read(2)
+            if checksum != fr.update_seq[0]:
+                print('i: {}'.format(buff.tell()))
+                print(fr.update_seq)
+                input('Update sequence mismatch. Expected: {} Actual: {}'.format(fr.update_seq[0], checksum))
+            buff.seek(-2,1)
+            buff.write(actual_data)
+        if len(fr.update_seq) == 1:
+            buff.seek(fs.pbs.bytes_per_sector - 2, 1)
+            checksum = buff.read(2)
+            if checksum != fr.update_seq[0]:
+                input('Update sequence mismatch. Expected: {} Actual: {}'.format(fr.update_seq[0], checksum))
+            buff.seek(-2,1)
+            buff.write(b'\x00\x00')
+        
+        #buff.seek(fr.attr_offset + start_pos, 0)
+        #while (buff.tell() - start_pos) < fr.bytes_in_use:
+        #    attr = Attribute.from_buffer(buff)
+        #    if attr.header.type == 0xFFFFFFFF:
+        #        break
+        #    fr.attributes.append(attr)            
         
         # Seek to the end of the file record to allow for the next file record to be read
         buff.seek(start_pos, 0)
@@ -213,7 +239,7 @@ class FileRecord:
                 raise Exception('Unknown attribute type: %s' % hex(attr.header.type))
         
         for attr in alloc_attrs:
-            for record in attr.read_indicies(index_record_size):
+            for record in attr.read_indicies(index_record_size, self.__fs):
                 for index in record.entries:
                     if index.stream is not None:
                         fn = FILE_NAME.from_bytes(index.stream)
@@ -266,6 +292,7 @@ class FileRecord:
         res.append('Base Record: {}'.format(self.base_record))
         res.append('Next Attribute ID: {}'.format(self.next_attr_id))
         res.append('Record Number: {}'.format(self.record_number))
+        res.append('Update Sequence: {}'.format(self.update_seq))
         res.append('Attributes:')
         for attr in self.attributes:
             res.append('---- ATTR START ----')

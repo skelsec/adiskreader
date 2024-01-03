@@ -89,7 +89,7 @@ class MFT:
                     inode = await self.get_inode(idx.file_ref)
                     break
             else:
-                print('Path not found')
+                #print('Path not found')
                 return None
         return inode
     

@@ -81,7 +81,7 @@ class INDEX_ALLOCATION(Attribute):
         # this must be obtained from the INDEX_ROOT attribute
         return si
     
-    def read_indicies(self, index_record_size):
+    def read_indicies(self, index_record_size, fs):
         buffer = io.BytesIO(self.header.data)
         buffer.seek(0, 0)
         while buffer.tell() < self.header.real_size:
@@ -92,7 +92,7 @@ class INDEX_ALLOCATION(Attribute):
             if recdata == b'':
                 # end of data
                 break
-            ir = IndexRecord.from_bytes(recdata)
+            ir = IndexRecord.from_bytes(recdata, fs)
             yield ir
     
     def __str__(self):
@@ -106,8 +106,8 @@ class INDEX_ALLOCATION(Attribute):
 class IndexRecord:
     def __init__(self):
         self.magic = None
-        self.update_seq_offset = None
-        self.update_seq_size = None # in WORDs
+        self.usa_offset = None
+        self.usa_count = None # in WORDs
         self.logfile_seq = None
         self.vcn = None
         self.index_header = None
@@ -115,12 +115,19 @@ class IndexRecord:
         self.entries = []
 
     @staticmethod
-    def from_bytes(data):
-        return IndexRecord.from_buffer(io.BytesIO(data))
+    def from_bytes(data, fs):
+        return IndexRecord.from_buffer(io.BytesIO(data), fs)
 
     @staticmethod
-    def from_buffer(buff):
+    def from_buffer(buff, fs):
         pos = buff.tell()
+
+        ### DEBUGGING ###
+        total_data = buff.read()
+        buff.seek(pos, 0)
+        ### DEBUGGING ###
+
+
         ir = IndexRecord()
         ir.magic = buff.read(4)
         if ir.magic != b'INDX':
@@ -131,16 +138,47 @@ class IndexRecord:
             print(buff.tell())
             input()
             raise Exception('Invalid magic for Index Record! Expected INDX, got {}'.format(ir.magic))
-        ir.update_seq_offset = int.from_bytes(buff.read(2), 'little')
-        ir.update_seq_size = int.from_bytes(buff.read(2), 'little')
+        ir.usa_offset = int.from_bytes(buff.read(2), 'little')
+        ir.usa_count = int.from_bytes(buff.read(2), 'little')
         ir.logfile_seq = int.from_bytes(buff.read(8), 'little')
         ir.vcn = int.from_bytes(buff.read(8), 'little')
         hdrpos = buff.tell()
         ir.index_header = IndexHeader.from_buffer(buff)
         
-        buff.seek(pos + ir.update_seq_offset, 0)
-        for _ in range(ir.update_seq_size):
-            ir.update_seq.append(buff.read(2))
+        # http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/concepts/fixup.html
+        buff.seek(ir.usa_offset + pos, 0)
+        for _ in range(ir.usa_count):
+            x = buff.read(2)
+            if x != b'\x00\x00':
+                ir.update_seq.append(x)
+        
+        ### DEBUG
+        matches = 0
+        #apply update sequence
+        buff.seek(pos, 0)
+        for actual_data in ir.update_seq[1:]:
+            buff.seek(fs.pbs.bytes_per_sector - 2, 1)
+            checksum = buff.read(2)
+            if ir.update_seq[0] != checksum:
+                print(total_data)
+                print('len: {}'.format(len(total_data)))
+                print('matches: {}'.format(matches))
+                print('i: {}'.format(buff.tell()))
+                print(ir.update_seq)
+                input('Update sequence mismatch. Expected: {} Actual: {}'.format(ir.update_seq[0], checksum))
+            else:
+                matches += 1
+            buff.seek(-2,1)
+            buff.write(actual_data)
+        
+        #if len(ir.update_seq) == 1:
+        #    buff.seek(fs.pbs.bytes_per_sector - 2, 1)
+        #    checksum = buff.read(2)
+        #    if checksum != ir.update_seq[0]:
+        #        input('Update sequence mismatch. Expected: {} Actual: {}'.format(ir.update_seq[0], checksum))
+        #    buff.seek(-2,1)
+        #    buff.write(b'\x00\x00')
+
         
         buff.seek(hdrpos + ir.index_header.first_entry_offset, 0)
         while buff.tell() < hdrpos + ir.index_header.first_entry_offset + ir.index_header.index_length:
