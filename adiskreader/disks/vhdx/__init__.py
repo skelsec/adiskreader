@@ -1,10 +1,10 @@
 import io
-import copy
 import math
 from typing import List
 from adiskreader.disks import Disk
+from adiskreader.datasource import DataSource
 from adiskreader.disks.vhdx.structures.headers import Headers, VHDX_KNOWN_REGIONS, BAT, MetaDataRegion
-from cachetools import cached, LRUCache
+from cachetools import LRUCache
 
 class VHDXDisk(Disk):
     def __init__(self):
@@ -15,30 +15,21 @@ class VHDXDisk(Disk):
         self.active_bat:BAT = None
         self.lba_per_block = None
         self.use_buffer = True
-        self.__lba_cache = {}
-        self.__block_cache = {}
-
-    def set_stream(self, stream:io.BytesIO):
-        self.__stream = stream
+        self.__lba_cache = LRUCache(maxsize=1000)
+        self.__block_cache = LRUCache(maxsize=1000)
+    
+    async def setup(self, ds:DataSource):
+        self.__stream = ds
+        await self.read_headers()
     
     @staticmethod
-    async def from_file(filepath:str):
-        stream = open(filepath, 'rb')
-        return await VHDXDisk.from_buffer(stream)
-    
-    @staticmethod
-    async def from_bytes(data:bytes):
-        await VHDXDisk.from_buffer(io.BytesIO(data))
-    
-    @staticmethod
-    async def from_buffer(buffer:io.BytesIO):
+    async def from_datasource(ds:DataSource):
         disk = VHDXDisk()
-        disk.set_stream(buffer)
-        await disk.read_headers()
+        await disk.setup(ds)
         return disk
 
     async def read_headers(self):
-        data = self.__stream.read(1*1024*1024)
+        data = await self.__stream.read(1*1024*1024)
         self.headers = Headers.from_bytes(data)
         await self.switch_active_region(1)
 
@@ -54,7 +45,6 @@ class VHDXDisk(Disk):
         entries = self.headers.RegionTable.entries
         if self.active_region == 2:
             entries = self.headers.RegionTable2.entries
-            
         
         for region in entries:
             region_type, region = await region.get_region(self.__stream)
@@ -72,6 +62,7 @@ class VHDXDisk(Disk):
         return data
     
     async def read_block(self, block_idx:int):
+        print('Reading block %s' % block_idx)
         if self.active_meta.LeaveBlockAllocated is False:
             # this is a dynamic disk, every chunk has a bitmap
             bitmap_block_cnt = block_idx // self.active_meta.ChunkRatio
@@ -83,19 +74,17 @@ class VHDXDisk(Disk):
         if entry[0] != 6:
             print('Block %s is not allocated' % block_idx)
             return b'\x00' * self.active_meta.BlockSize
-        #print('Reading block %s Offset: %s State: %s' % (block_idx, entry[1], entry[0]))
+        
         offset = entry[1]
-        self.__stream.seek(offset, 0)
-        data = self.__stream.read(self.active_meta.BlockSize)
+        await self.__stream.seek(offset, 0)
+        data = await self.__stream.read(self.active_meta.BlockSize)
         if self.use_buffer is True:
             self.__block_cache[block_idx] = data
         if len(data) != self.active_meta.BlockSize:
             raise Exception('Block size mismatch')
         return data
 
-    async def read_LBAs(self, lbas:List[int], debug = False):
-        #input(f'Reading LBAs: {lbas}')
-
+    async def read_LBAs(self, lbas:List[int]):
         # Check if LBAs are contiguous
         sorted_lbas = sorted(lbas)
         if any(sorted_lbas[i] + 1 != sorted_lbas[i + 1] for i in range(len(sorted_lbas) - 1)):
@@ -104,29 +93,17 @@ class VHDXDisk(Disk):
         # Get the range of blocks to read
         first_lba = sorted_lbas[0]
         last_lba = sorted_lbas[-1]
-        #first_block_idx = first_lba // self.active_meta.lba_per_block
-        #last_block_idx = last_lba // self.active_meta.lba_per_block
 
         first_block_idx = math.floor(first_lba / self.active_meta.lba_per_block)
         last_block_idx = math.ceil(last_lba / self.active_meta.lba_per_block)
-
-        if debug:
-            print(f'first_lba: {first_lba}')
-            print(f'last_lba: {last_lba}')
-            print(f'first_block_idx: {first_block_idx}')
-            print(f'last_block_idx: {last_block_idx}')
 
         # Read the blocks
         block_data = io.BytesIO()
         for block_idx in range(first_block_idx, last_block_idx + 1):
             if block_idx in self.__block_cache:
-                if debug:
-                    print(f'Using block cache for block {block_idx}')
                 temp = self.__block_cache[block_idx]
                 block_data.write(temp)
             else:
-                if debug:
-                    print(f'Reading block {block_idx}')
                 temp = await self.read_block(block_idx)
                 block_data.write(temp)
 
@@ -135,18 +112,9 @@ class VHDXDisk(Disk):
         # Calculate the start offset
         start_block_lba = first_block_idx * self.active_meta.lba_per_block
         start_offset = (first_lba - start_block_lba) * self.active_meta.LogicalSectorSize
-        #print('First LBA: {} Start block: {}'.format(first_lba, first_block_idx))
-        #input('Read block {} Start offset: {}'.format(first_block_idx, start_offset))
-        #(first_lba % self.active_meta.lba_per_block) * self.active_meta.LogicalSectorSize
 
         # Calculate the total length of data to extract
         total_length = ((last_lba - first_lba + 1) * self.active_meta.LogicalSectorSize)
-
-        if debug:
-            print(f'start_block_lba: {start_block_lba}')
-            print(f'start_offset: {start_offset}')
-            print(f'total_length: {total_length}')
-            input()
 
         # Extract and return the relevant portion of block data
         block_data.seek(start_offset, 0)
@@ -164,6 +132,4 @@ class VHDXDisk(Disk):
         offset_in_block = lba % self.active_meta.lba_per_block
         offset = offset_in_block * self.active_meta.LogicalSectorSize
         return self.__add_to_cache_return(lba, block[offset:offset+self.active_meta.LogicalSectorSize])
-        #print('Reading LBA {} from offset {} with state {}'.format(lba, offset, entry[0]))    
-
         

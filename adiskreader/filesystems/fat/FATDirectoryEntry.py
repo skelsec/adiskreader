@@ -4,6 +4,7 @@
 import posixpath
 import struct
 import warnings
+import os
 
 from time import timezone
 
@@ -93,6 +94,11 @@ class FATDirectoryEntry:
         self.wrtdate = int(DIR_WrtDate)
         self.fstcluslo = int(DIR_FstClusLO)
         self.filesize = int(DIR_FileSize)
+
+        self.ctime = DosDateTime.convert_dt(DIR_CrtDate, DIR_CrtTime)
+        self.wtime = DosDateTime.convert_dt(DIR_WrtDate, DIR_WrtTime)
+        self.atime = DosDateTime.convert_dt(DIR_LstAccessDate, 0)
+
 
         self.__lazy_load = lazy_load
         self.__fs = fs
@@ -214,13 +220,6 @@ class FATDirectoryEntry:
         """
         return self.filesize
 
-    def set_size(self, size: int):
-        """Set filesize.
-
-        :param size: `int`: File size in bytes
-        """
-        self.filesize = size
-
     def get_cluster(self):
         """Get cluster address of directory entry.
 
@@ -271,7 +270,7 @@ class FATDirectoryEntry:
     def _get_parent_dir(self, sd):
         """Build path name for recursive directory entries."""
         name = self.__repr__()
-        if self.__repr__() == "/":
+        if self.__repr__() == "\\":
             name = ""
         sd += [name]
 
@@ -296,11 +295,11 @@ class FATDirectoryEntry:
         self.__dirs += [dir_entry]
 
     def get_full_path(self):
-        """Iterate all parents up and join them by "/"."""
+        """Iterate all parents up and join them by "\\"."""
         parent_dirs = [self.__repr__()]
 
         if self._parent is None:
-            return "/"
+            return "\\"
 
         return posixpath.join(*list(reversed(
             self._parent._get_parent_dir(parent_dirs))))
@@ -372,6 +371,21 @@ class FATDirectoryEntry:
         :returns: Boolean value indicating archive attribute is set
         """
         return (self.ATTR_ARCHIVE & self.attr) > 0
+    
+    async def stat(self):
+        # returns the stat of the file
+        st_uid=1000 #TODO
+        st_gid=1000 #TODO
+        st_nlink=self.ntres
+        st_ino=self.get_cluster()
+        st_mode=33261 #TODO
+        st_atime = int(self.atime.timestamp())
+        st_mtime = int(self.wtime.timestamp())
+        st_ctime = int(self.ctime.timestamp())
+        st_size = self.filesize
+        st_dev = 1
+        return os.stat_result((st_mode, st_ino, st_dev, st_nlink, st_uid, st_gid, st_size, st_atime, st_mtime, st_ctime))
+
 
     async def is_empty(self):
         """Determine if directory does not contain any directories."""
@@ -472,7 +486,14 @@ class FATDirectoryEntry:
         await self.__populate_dirs()
 
         root = self.get_full_path()
-        dirs, files, _ = self.get_entries()
+        rdirs, rfiles, _ = await self.get_entries()
+        dirs = []
+        files = []
+        for dir in rdirs:
+            dirs.append(dir.get_long_or_short_name())
+
+        for file in rfiles:
+            files.append(file.get_long_or_short_name())
 
         yield root, dirs, files
         for d in self.__dirs:
@@ -514,7 +535,71 @@ class FATDirectoryEntry:
                                          "dir entry.")
 
         return str(self.lfn_entry)
+    
+    async def get_child(self, name:str):
+        """Returns a subdirectory or file in current directory"""
+        dirs, files, _ = await self.get_entries()
+        for entry in dirs+files:
+            try:
+                if entry.get_long_name() == name:
+                    return entry
+            except NotAnLFNEntryException:
+                pass
+            if entry.get_short_name() == name:
+                return entry
+        return None
+    
+    async def resolve_full_path(self):
+        """Returns the full path of the current directory entry"""
+        path = self.get_full_path()
+        if path == '':
+            return path
+        if self._parent is None:
+            return ''
+        parent = self.get_parent_dir()
+        pp = await parent.resolve_full_path()
+        return str(pp) + '\\' + self.get_long_or_short_name()
+    
+    async def get_children(self):
+        """Returns a list of directory entries in current directory"""
+        dirs, files, _ = await self.get_entries()
+        for entry in dirs:
+            try:
+                dirname = entry.get_long_name()
+            except NotAnLFNEntryException:
+                dirname = entry.get_short_name()
+            yield 'dir', dirname, entry
+        for entry in files:
+            fname = entry.get_short_name()
+            yield 'file', fname, entry
+    
+    async def get_parent(self):
+        """Returns the parent directory entry"""
+        return self.get_parent_dir()
+    
+    async def get_console_output(self):
+        dirs, files, _ = await self.get_entries()
+        for dirobj in dirs:
+            actual_dir = await self.get_child(str(dirobj))
+            if actual_dir is None:
+                continue
+            yield '%s\t%s\t%s\t%s' % ('dr-xr-xr-x', 0, actual_dir.ctime, actual_dir.get_long_or_short_name())
+        
+        for fobj in files:
+            actual_file = await self.get_child(str(fobj))
+            if actual_file is None:
+                continue
+            yield '%s\t%s\t%s\t%s' % (' r--r--r--', actual_file.filesize, actual_file.ctime, actual_file.get_long_or_short_name())
 
+    def get_long_or_short_name(self):
+        """Get long name of directory entry.
+
+        :returns: str: Long file name of directory entry
+        """
+        try:
+            return self.get_long_name()
+        except NotAnLFNEntryException:
+            return self.get_short_name()
 
 class FATLongDirectoryEntry(object):
     """Represents long file name (LFN) entries."""

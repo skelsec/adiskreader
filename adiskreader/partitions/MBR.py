@@ -7,8 +7,13 @@ class MBR:
         self.boot_code_2 = None
         self.timestamp = None
         self.disk_signature = None
-        self.partition_table = []
+        self.PartitionEntries = []
         self.boot_signature = None
+    
+    @staticmethod
+    async def from_disk(disk):
+        data = await disk.read_LBA(0)
+        return MBR.from_bytes(data)
 
     @staticmethod
     def from_bytes(data):
@@ -27,7 +32,7 @@ class MBR:
             pt = MBRPartitionEntry.from_buffer(buff)
             if pt.partition_type == b'\x00':
                 continue
-            mbr.partition_table.append(pt)
+            mbr.PartitionEntries.append(pt)
         mbr.boot_signature = buff.read(2)
         if mbr.boot_signature != b'\x55\xAA':
             raise Exception('Invalid boot signature')
@@ -41,7 +46,7 @@ class MBR:
         res.append('Boot Code 2: {}'.format(self.boot_code_2.hex()))
         res.append('Disk Signature: {}'.format(self.disk_signature.hex())) #disk_signature
         res.append('Partition Table:')
-        for pt in self.partition_table:
+        for pt in self.PartitionEntries:
             res.append('  {}'.format(pt))
         res.append('Boot Signature: {}'.format(self.boot_signature.hex()))
         return '\n'.join(res)

@@ -130,11 +130,7 @@ class FAT(FileSystem):
         :type offset: int
         """
         self.__disk = disk
-        self.__start_lba = start_lba
-
-        #self.__fp: FileIO = None
-        #self.__fp_offset = offset
-        
+        self.__start_lba = start_lba        
         self._fat_size = 0
         self.bpb_header: BootSectorHeader = None
         self.root_dir = None
@@ -149,21 +145,11 @@ class FAT(FileSystem):
         self.encoding = encoding
         self.is_read_only = True
         self.lazy_load = True
-        self.__lock = threading.Lock()
-
-    def __set_fp(self, fp: Union[IOBase, BytesIO]):
-        if self.__fp is not None:
-            raise PyFATException("Cannot overwrite existing file handle, "
-                                 "create new class instance of PyFAT.",
-                                 errno=errno.EMFILE)
-        self.__fp = fp
-
-    def __seek(self, address: int):
-        """Seek to given address with offset."""
-        if self.__fp is None:
-            raise PyFATException("Cannot seek without a file handle!",
-                                 errno=errno.ENXIO)
-        self.__fp.seek(address + self.__fp_offset)
+    
+    async def setup(self):
+        await self.parse_header()
+        await self._parse_fat()
+        await self.parse_root_dir() 
 
     @_init_check
     async def read_cluster_contents(self, cluster: int) -> bytes:
@@ -176,11 +162,8 @@ class FAT(FileSystem):
         cluster_address = self.get_data_cluster_address(cluster)
         start_lba = self.__start_lba + (cluster_address // self.bpb_header["BPB_BytsPerSec"])
         end_lba = start_lba + math.ceil(sz / self.bpb_header["BPB_BytsPerSec"])
-        data = await self.__disk.read_LBAs(range(start_lba, end_lba))
+        data = await self.__disk.read_LBAs(range(start_lba, end_lba+1))
         return data[:sz]
-        #with self.__lock:
-        #    self.__seek(cluster_address)
-        #    return self.__fp.read(sz)
 
     def __get_clean_shutdown_bitmask(self):
         """Get clean shutdown bitmask for current FS.
@@ -204,46 +187,6 @@ class FAT(FileSystem):
                     self.FAT_DIRTY_BIT_MASK) == self.FAT_DIRTY_BIT_MASK
 
         return dos_dirty or nt_dirty
-
-    def set_fp(self, fp: Union[BytesIO, IOBase]):
-        """Open a filesystem from a valid file pointer.
-
-        This allows using in-memory filesystems (e.g., BytesIO).
-
-        :param fp: `FileIO`: Valid `FileIO` object
-        """
-        if not fp.readable():
-            raise PyFATException("Cannot read data from file pointer.",
-                                 errno=errno.EACCES)
-
-        if not fp.seekable():
-            raise PyFATException("Cannot seek file object.",
-                                 errno=errno.EINVAL)
-
-        self.is_read_only = not fp.writable()
-
-        self.__set_fp(fp)
-
-        # Parse BPB & FAT headers of given file
-        self.parse_header()
-
-        # Parse FAT
-        self._parse_fat()
-
-        # Check for clean shutdown
-        if self._is_dirty():
-            warnings.warn("Filesystem was not cleanly unmounted on last "
-                          "access. Check for data corruption.")
-        if not self.is_read_only:
-            self._mark_dirty()
-
-        # Parse root directory
-        self.parse_root_dir()
-
-    @_init_check
-    def get_fs_location(self):
-        """Retrieve path of opened filesystem."""
-        return self.__fp.name
 
     def _get_total_sectors(self):
         """Get total number of sectors for all FAT sizes."""
@@ -282,7 +225,7 @@ class FAT(FileSystem):
         start_lba = self.__start_lba + self.bpb_header["BPB_RsvdSecCnt"]
         for i in range(self.bpb_header["BPB_NumFATs"]):
             end_lba = start_lba + self._fat_size
-            fatdata = await self.__disk.read_LBAs(range(start_lba, end_lba))
+            fatdata = await self.__disk.read_LBAs(range(start_lba, end_lba+1))
             fats += [fatdata[:fat_size]]
             start_lba = end_lba
         
@@ -413,7 +356,7 @@ class FAT(FileSystem):
                                                        root_dir_byte +
                                                        max_bytes)
         for dir_entry in subdirs:
-            self.root_dir.add_subdirectory(dir_entry)
+            await self.root_dir.add_subdirectory(dir_entry)
 
     async def _fat32_parse_root_dir(self):
         """Parse FAT32 root dir entries.
@@ -425,7 +368,6 @@ class FAT(FileSystem):
         self.root_dir.set_cluster(root_cluster)
 
         # Follow root directory cluster chain
-        input('_fat32_parse_root_dir')
         async for dir_entry in self.parse_dir_entries_in_cluster_chain(root_cluster):
             await self.root_dir.add_subdirectory(dir_entry,
                                            recursive=not self.lazy_load)
@@ -501,15 +443,11 @@ class FAT(FileSystem):
         dir_entries = []
 
         start_lba = self.__start_lba + (address // self.bpb_header["BPB_BytsPerSec"]) #here we're taking it for granted that the start address is a multiple of the sector size
-        end_lba = math.ceil((address + max_address) / self.bpb_header["BPB_BytsPerSec"])
-        dir_datas = await self.__disk.read_LBAs(range(start_lba, end_lba))
-        print(range(start_lba, end_lba))
+        end_lba = self.__start_lba + math.ceil((address + max_address) / self.bpb_header["BPB_BytsPerSec"])
+        dir_datas = await self.__disk.read_LBAs(range(start_lba, end_lba+1))
 
-        #for hdr_addr in range(address, max_address, dir_hdr_size):
-        input(range((max_address-address)//dir_hdr_size))
         for i in range((max_address-address)//dir_hdr_size):
             dir_data = dir_datas[i*dir_hdr_size:(i+1)*dir_hdr_size]
-            input(dir_data)
             # Parse each entry
             dir_hdr = self.__parse_dir_entry(dir_data)
             dir_sn = EightDotThree(encoding=self.encoding)
@@ -719,9 +657,6 @@ class FAT(FileSystem):
                                   self.root_dir_sectors)
 
         # Check signature
-        #with self.__lock:
-        #    self.__seek(510)
-        #    signature = struct.unpack("<H", self.__fp.read(2))[0]
         signature = boot_sector[510:512]
         if signature != b'\x55\xAA':
             raise PyFATException(f"Invalid signature: \'{signature.hex()}\'.")
@@ -801,34 +736,50 @@ class FAT(FileSystem):
                             "size": entry.filesize,
                             "type": self.gettype(path)}}
         return info
-
-    #@staticmethod
-    #@contextmanager
-    #def open_fs(filename: str, offset: int = 0,
-    #            encoding=FAT_OEM_ENCODING):
-    #    """Context manager for direct use of PyFAT."""
-    #    pf = PyFat(encoding=encoding, offset=offset)
-    #    pf.open(filename)
-    #    yield pf
-    #    pf.close()
     
     @staticmethod
-    async def from_disk(disk:Disk, start_lba:int):
-        fs = FAT(disk, start_lba)
-        await fs.parse_header()
-        await fs._parse_fat()
-        await fs.parse_root_dir() 
+    async def from_disk(disk:Disk, start_lba:int, encoding=FAT_OEM_ENCODING):
+        fs = FAT(disk, start_lba, encoding=encoding)
+        await fs.setup()
         return fs
     
     @staticmethod
-    async def from_partition(partition:Partition):
-        return await FAT.from_disk(partition.disk, partition.start_LBA)
+    async def from_partition(partition:Partition, encoding=FAT_OEM_ENCODING):
+        return await FAT.from_disk(partition.disk, partition.start_LBA, encoding=encoding)
     
     async def open(self, path:str, mode:str = 'rb'):
         from adiskreader.filesystems.fat.FatIO import FatIO
-        
-        #info = await self.getinfo(path)
-        #input(info)
         file = FatIO(self, path, mode)
         await file.setup()
         return file
+    
+    async def walk(self, path:str = "\\"):
+        if path == "\\":
+            async for root, dirs, files in self.root_dir.walk():
+                if root == '/':
+                    root = '\\'
+                if root.startswith('\\') is False:
+                    root = '\\' + root
+                yield root, dirs, files
+        else:
+            entry = await self.root_dir.get_entry(path)
+            if entry.is_file():
+                raise NotADirectoryError
+            async for root, dirs, files in entry.walk():
+                if root == '/':
+                    root = '\\'
+                if root.startswith('\\') is False:
+                    root = '\\' + root
+                yield root, dirs, files
+    
+    async def stat(self, path:str):
+        if path == "\\":
+            return self.root_dir.stat()
+        entry = await self.root_dir.get_entry(path)
+        return await entry.stat()
+    
+    async def get_root(self):
+        return self.root_dir
+    
+    async def get_record_by_path(self, path:str):
+        return await self.root_dir.get_entry(path)

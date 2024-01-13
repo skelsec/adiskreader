@@ -1,6 +1,7 @@
 import io
 import enum
 from adiskreader.filesystems.ntfs.structures.attributes import Attribute
+from adiskreader.filesystems.ntfs.structures.utils import apply_fixups
 
 class INDEX_ROOT(Attribute):
     def __init__(self):
@@ -41,16 +42,22 @@ class INDEX_ROOT(Attribute):
         # Seek to the first index entry
         buff.seek(hdrpos + si.index_header.first_entry_offset, 0)
         
-        #while buff.tell() < (pos + si.index_header.first_entry_offset + si.index_header.index_length):
+        # Read all index entries
+        # Added multiple safeguards to prevent infinite loops
+        pos_safegueard = buff.tell()
         while buff.tell() < hdrpos + si.index_header.index_length:
             entry = IndexEntry.from_buffer(buff)
+            if buff.tell() == pos_safegueard:
+                # no progress made, break out of loop
+                break
+
             si.index_entries.append(entry)
             # correct padding
             if (buff.tell() % si.bytes_per_record) != 0:
                 buff.seek(si.bytes_per_record - (buff.tell() % si.bytes_per_record), 1)
 
-            #if IndexEntryFlag.LAST_ENTRY in entry.flags:
-            #    break
+            if IndexEntryFlag.LAST_ENTRY in entry.flags:
+                break
         return si
 
     def __str__(self):
@@ -121,13 +128,6 @@ class IndexRecord:
     @staticmethod
     def from_buffer(buff, fs):
         pos = buff.tell()
-
-        ### DEBUGGING ###
-        total_data = buff.read()
-        buff.seek(pos, 0)
-        ### DEBUGGING ###
-
-
         ir = IndexRecord()
         ir.magic = buff.read(4)
         if ir.magic != b'INDX':
@@ -145,39 +145,7 @@ class IndexRecord:
         hdrpos = buff.tell()
         ir.index_header = IndexHeader.from_buffer(buff)
         
-        # http://inform.pucp.edu.pe/~inf232/Ntfs/ntfs_doc_v0.5/concepts/fixup.html
-        buff.seek(ir.usa_offset + pos, 0)
-        for _ in range(ir.usa_count):
-            x = buff.read(2)
-            if x != b'\x00\x00':
-                ir.update_seq.append(x)
-        
-        ### DEBUG
-        matches = 0
-        #apply update sequence
-        buff.seek(pos, 0)
-        for actual_data in ir.update_seq[1:]:
-            buff.seek(fs.pbs.bytes_per_sector - 2, 1)
-            checksum = buff.read(2)
-            if ir.update_seq[0] != checksum:
-                print(total_data)
-                print('len: {}'.format(len(total_data)))
-                print('matches: {}'.format(matches))
-                print('i: {}'.format(buff.tell()))
-                print(ir.update_seq)
-                input('Update sequence mismatch. Expected: {} Actual: {}'.format(ir.update_seq[0], checksum))
-            else:
-                matches += 1
-            buff.seek(-2,1)
-            buff.write(actual_data)
-        
-        #if len(ir.update_seq) == 1:
-        #    buff.seek(fs.pbs.bytes_per_sector - 2, 1)
-        #    checksum = buff.read(2)
-        #    if checksum != ir.update_seq[0]:
-        #        input('Update sequence mismatch. Expected: {} Actual: {}'.format(ir.update_seq[0], checksum))
-        #    buff.seek(-2,1)
-        #    buff.write(b'\x00\x00')
+        ir.update_seq = apply_fixups(buff, ir.usa_offset, ir.usa_count, start_pos=pos, bytes_per_sector=fs.pbs.bytes_per_sector, validate_checksum=False)
 
         
         buff.seek(hdrpos + ir.index_header.first_entry_offset, 0)

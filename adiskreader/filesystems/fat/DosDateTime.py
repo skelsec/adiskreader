@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """Enhancement of datetime for DOS date/time format compatibility."""
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 
 
 def _convert_to_dos_date(func):
@@ -32,6 +32,7 @@ class DosDateTime(datetime):
     @staticmethod
     def deserialize_date(dt: int) -> "DosDateTime":
         """Convert a DOS date format to a Python object."""
+        dt = int(dt)
         day = dt & (1 << 5) - 1
         month = (dt >> 5) & ((1 << 4) - 1)
         year = ((dt >> 9) & (1 << 7) - 1) + 1980
@@ -44,6 +45,7 @@ class DosDateTime(datetime):
     @staticmethod
     def deserialize_time(tm: int) -> time:
         """Convert a DOS time format to a Python object."""
+        tm = int(tm)
         second = (tm & (1 << 5) - 1) * 2
         minute = (tm >> 5) & ((1 << 6) - 1)
         hour = (tm >> 11) & ((1 << 5) - 1)
@@ -52,3 +54,10 @@ class DosDateTime(datetime):
             return time(hour, minute, second)
         except ValueError:
             return time(0, 0, 0)
+        
+    @staticmethod
+    def convert_dt(dt:int, tm:int) -> datetime:
+        """Convert DOS date/time format to a Python object."""
+        return datetime.combine(DosDateTime.deserialize_date(dt),
+                                DosDateTime.deserialize_time(tm),
+                                tzinfo=timezone.utc)   

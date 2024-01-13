@@ -1,19 +1,17 @@
 import io
-
+import ntpath
+from collections import OrderedDict
 from cachetools import LRUCache
 from adiskreader.filesystems.ntfs.structures.filerecord import FileRecord
 from adiskreader.filesystems.ntfs.structures.file import NTFSFile
 
-
 # MFT is a special file record that contains the list of all other file records on the filesystem
 class MFT:
-    def __init__(self, fs, start_cluster, inode = 0):
+    def __init__(self, fs, start_cluster):
         self.__fs = fs
-        self.__inode = inode
         self.__start_cluster = start_cluster
         self.__record_size = None
-        self.__root_ref = 5 #this should be constant
-        self.__inode_cache = LRUCache(maxsize=1000)
+        self.__inode_cache = LRUCache(maxsize=10000)
         self.record:FileRecord = None
         self.mftdata = io.BytesIO()
 
@@ -30,43 +28,26 @@ class MFT:
         recdata.seek(0, 0)
 
         # parse the MFT file record
-        self.record = FileRecord.from_buffer(recdata, self.__fs, self.__inode)
+        self.record = FileRecord.from_buffer(recdata, self.__fs)
         self.file = NTFSFile(self.__fs, self.record)
         await self.file.setup()
 
-        #async for dataattr in self.record.get_attribute_by_type(0x80, self):
-        #    pbar = tqdm(total=dataattr.header.real_size, unit='B', unit_scale=True)
-        #    async for chunk in dataattr.header.read_attribute_data(self.__fs):
-        #        self.mftdata.write(chunk)
-        #        pbar.update(len(chunk))
-        #        
-        #    pbar.close()
-        #    break
-        #
-        #self.mftdata.seek(0, 0)
-
     async def get_inode(self, ref):
-        # retrieve the inode from the MFT with all attributes resolved, except the data attribute
-        #self.mftdata.seek(ref * self.__record_size, 0)
-        #frdata = self.mftdata.read(self.__record_size)
-        #if frdata == b'\x00' * self.__record_size:
-        #    return None
-        #input(frdata)
-        #fr = FileRecord.from_bytes(frdata)
-        #await fr.reparse(self.__fs)
-        #return fr
         if ref in self.__inode_cache:
             return self.__inode_cache[ref]
         await self.file.seek(ref * self.__record_size, 0)
         frdata = await self.file.read(self.__record_size)
         if frdata == b'\x00' * self.__record_size:
             return None
-        fr = FileRecord.from_bytes(frdata, self.__fs, ref)
+        fr = FileRecord.from_bytes(frdata, self.__fs)
         await fr.reparse(self.__fs)
         self.__inode_cache[ref] = fr
         return fr
     
     async def find_path(self, path):
+        if path == '\\':
+            return await self.get_inode(5)
+        
         # split path into parts
         parts = path.split('\\')
         if parts[0] == '':
@@ -92,49 +73,60 @@ class MFT:
                 #print('Path not found')
                 return None
         return inode
-    
-    async def list_directory(self, path):
-        dir_inode = await self.find_path(path)
-        if dir_inode is None:
-            raise Exception('Path not found')
-        async for idx, fn in dir_inode.list_directory():
-            yield fn.name
-    
-    async def resolve_full_path(self, file_record):
-        paths = []
-        refs_seen = {}
-        
-        fn = file_record.get_main_filename_attr()
-        current_ref = fn.parent_ref
-        seq = fn.parent_seq
-        paths.append(fn.name)
-
-        while current_ref != self.__root_ref:
-            if current_ref in refs_seen:
-                print('Loop detected')
-                break
-            refs_seen[current_ref] = True
-            try:
-                #print('Current ref: %s' % current_ref)
-                inode = await self.get_inode(current_ref)
-                current_file_attr = inode.get_main_filename_attr()
-            except IndexError:
-                print('Ref %s not found in INODE table' % current_ref)
-                break
-            
-            if seq != current_file_attr.parent_seq:
-                #print('Sequence mismatch: %s' % ('\\'.join(reversed(paths))))
-                return None
-            current_ref = current_file_attr.parent_ref
-            seq = current_file_attr.parent_seq
-            paths.append(current_file_attr.name)
-        
-        full_path = '\\'.join(reversed(paths))
-        #input(full_path)
-        #input(self.inodes[ref].get_attribute_by_type(0x30)[0].name)
 
     @staticmethod
     async def from_filesystem(fs, start_cluster):
         mft = MFT(fs, start_cluster)
         await mft.setup()
         return mft
+    
+    async def walk(self, path:str = "\\"):
+        inode = await self.find_path(path)
+        if inode is None:
+            #raise Exception('Path not found')
+            yield [], [], []
+        if inode.is_directory() is False:
+            raise Exception('Path is not a directory')
+        
+        subdirs = OrderedDict()
+
+        async for root, dirs, files, dindices in inode.walk(path):
+            if root.startswith('\\') is False:
+                root = '\\' + root
+            yield root, dirs, files
+            if len(dindices) == 0:
+                continue
+            if root not in subdirs:
+                subdirs[root] = dindices
+            else:
+                subdirs[root].extend(dindices)
+        
+
+        ref_seen = {}
+        while True:
+            try:
+                x = subdirs.popitem(last=False)
+                root, subdir_indices = x
+            except KeyError:
+                break
+            
+            while subdir_indices:
+                file_ref, fname = subdir_indices.pop()
+                if file_ref in ref_seen:
+                    continue
+                dirpath = ntpath.join(root,fname)
+                inode = await self.get_inode(file_ref)
+                ref_seen[file_ref] = True
+                if inode is None:
+                    continue
+                    
+                async for subroot, dirs, files, dindices in inode.walk():
+                    if subroot.startswith('\\') is False:
+                        subroot = '\\' + subroot
+                    yield subroot, dirs, files
+
+                    if len(dindices) == 0:
+                        continue
+
+                    subdirs[dirpath] = dindices
+        

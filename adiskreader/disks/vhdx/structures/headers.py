@@ -186,8 +186,8 @@ class RegionTableEntry:
         self.Required = None
 
     async def get_region(self, buffer:io.BytesIO):
-        buffer.seek(self.FileOffset)
-        data = buffer.read(self.Length)
+        await buffer.seek(self.FileOffset)
+        data = await buffer.read(self.Length)
         if str(self.Guid).upper() in VHDX_KNOWN_REGIONS:
             return (str(self.Guid).upper(), VHDX_KNOWN_REGIONS[str(self.Guid).upper()].from_bytes(data))
         return ('UNKNOWN', data)

@@ -1,10 +1,9 @@
 import io
 import enum
-import uuid
-from adiskreader.utils import filetime_to_dt
-from adiskreader.filesystems.ntfs.structures.attributes import Attribute
 import datetime
 
+from adiskreader.utils import filetime_to_dt
+from adiskreader.filesystems.ntfs.structures.attributes import Attribute
 
 class FILE_NAME(Attribute):
     def __init__(self):
@@ -22,6 +21,9 @@ class FILE_NAME(Attribute):
         self.name_length:int = None
         self.namespace = None
         self.name:str = None
+    
+    def is_directory(self):
+        return FileNameFlag.DIRECTORY in self.flags
 
     @staticmethod
     def from_header(header):

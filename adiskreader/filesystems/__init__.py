@@ -13,9 +13,14 @@ class FileSystem:
     async def from_partition(partition:Partition):
         raise NotImplementedError()
 
-    async def ls(self, path:str):
+    async def get_root(self):
         raise NotImplementedError()
     
     async def open(self, path:str, mode:str = 'rb'):
         raise NotImplementedError()
     
+    async def stat(self, path:str):
+        raise NotImplementedError()
+    
+    async def walk(self, path:str = "\\"):
+        raise NotImplementedError()

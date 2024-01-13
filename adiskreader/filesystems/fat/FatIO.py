@@ -11,7 +11,7 @@ from typing import Union, Optional
 from adiskreader.filesystems.fat import FAT
 
 
-class FatIO(io.RawIOBase):
+class FatIO(): #io.RawIOBase
     """Wrap basic I/O operations for FAT."""
 
     def __init__(self, fs: FAT,
@@ -24,7 +24,7 @@ class FatIO(io.RawIOBase):
                             the file must exist.
         :param mode: `Mode`: Mode to open file in.
         """
-        super(FatIO, self).__init__()
+        #super(FatIO, self).__init__()
         self.mode = mode
         self.fs = fs
         self.name = str(path)
@@ -44,8 +44,6 @@ class FatIO(io.RawIOBase):
     
     async def setup(self):
         self.dir_entry = await self.fs.root_dir.get_entry(self.name)
-        print(type(self.dir_entry))
-        input(self.dir_entry )
         if self.dir_entry.is_directory() or self.dir_entry.is_special():
             raise IsADirectoryError(errno.EISDIR, self.name)
         elif self.dir_entry.is_volume_id():
@@ -63,7 +61,7 @@ class FatIO(io.RawIOBase):
                    f'path="{self.name}" '
                    f'mode="{self.mode}"')
 
-    def seek(self, offset: int, whence: int = 0) -> int:
+    async def seek(self, offset: int, whence: int = 0) -> int:
         """Seek to a given offset in the file.
 
         :param offset: ``int``: offset in bytes in the file
@@ -73,6 +71,10 @@ class FatIO(io.RawIOBase):
                        - ``2``: relative to file end
         :returns: New position in bytes in the file
         """
+        if isinstance(offset, int) is False:
+            raise TypeError(f"offset must be an integer, not {type(offset)}")
+        if isinstance(whence, int) is False:
+            raise TypeError(f"whence must be an integer, not {type(whence)}")
         if whence == 1:
             offset += self.__bpos
         elif whence == 2:
@@ -113,9 +115,9 @@ class FatIO(io.RawIOBase):
         """
         return True
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Close open file handles assuming lock handle."""
-        self.seek(0)
+        await self.seek(0)
         super().close()
 
     def readable(self) -> bool:
@@ -125,10 +127,9 @@ class FatIO(io.RawIOBase):
     async def read(self, size: int = -1) -> Union[bytes, None]:
         """Read given bytes from file."""
 
+        if isinstance(size, int) is False:
+            raise TypeError(f"size must be an integer, not {type(size)}")
         # Set size boundary
-        print('Size: %s' % size)
-        print('__bpos: %s' % self.__bpos)
-        print('Fsize: %s' % self.dir_entry.filesize)
         if size + self.__bpos > self.dir_entry.filesize or size < 0:
             size = self.dir_entry.filesize - self.__bpos
 
@@ -152,7 +153,7 @@ class FatIO(io.RawIOBase):
             if read_bytes == size:
                 break
 
-        self.seek(read_bytes, 1)
+        await self.seek(read_bytes, 1)
 
         chunks = b"".join(chunks)
         if len(chunks) != size:
@@ -166,3 +167,7 @@ class FatIO(io.RawIOBase):
         bytes_read = len(data)
         __buffer[:bytes_read] = data
         return bytes_read
+
+    async def tell(self):
+        """Return the current file position."""
+        return self.__bpos

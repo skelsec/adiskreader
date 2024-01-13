@@ -79,7 +79,13 @@ class NTFSFile:
             if stop_offset_pos == 0:
                 stop_offset_pos = None
             stop_idx = len(self.__dataruns) - 1
-
+        
+        if stop_idx is None:
+            stop_idx = len(self.__dataruns) - 1
+            stop_offset_cluster = 0
+            stop_offset_pos = target_range.stop - (stop_offset_cluster * self.__fs.cluster_size)
+            if stop_offset_pos == 0:
+                stop_offset_pos = None
         #print('runs: %s' % self.__dataattr.header.data_runs)
         #print('start_offset_pos: %s' % start_offset_pos)
         #print('start_offset_cluster: %s' % start_offset_cluster)
@@ -90,6 +96,8 @@ class NTFSFile:
         #input()
 
         if start_idx is None or stop_idx is None:
+            print('start_idx: %s' % start_idx)
+            print('stop_idx: %s' % stop_idx)
             print('size: %s' % size)
             print('total size: %s' % self.__dataattr.header.real_size)
             print('data runs: %s' % self.__dataattr.header.data_runs)
@@ -185,26 +193,27 @@ class NTFSFile:
             elif whence == 1:
                 newpos = pos + self.__pos
             elif whence == 2:
-                newpos = self.__dataattr.header.real_size - pos
+                newpos = self.__real_size - pos
             else:
                 raise Exception('Invalid whence value')
             
-            if newpos < 0 or newpos > self.__dataattr.header.real_size:
+            if newpos < 0 or newpos > self.__real_size:
                 raise Exception('Invalid position')
             self.__pos = newpos
 
     async def read(self, size=-1):
+        if self.__pos >= self.__real_size:
+            return b''
         if self.__dataattr.header.non_resident is False:
             if size == -1:
                 size = self.__buffer_total_len - self.__buffer.tell()
             if size < 1:
                 return b''
             data = self.__buffer.read(size)
-            self.__pos += len(data)
             return data
         else:
             if size == -1:
-                size = self.__dataattr.header.real_size - self.__pos
+                size = self.__real_size - self.__pos
             if size < 1:
                 return b''
             data = await self.read_runs(size)
