@@ -27,8 +27,10 @@ class FileSource(DataSource):
     
     async def read(self, size:int):
         self.__stream.seek(self.__offset, 0)
-        return self.__stream.read(size)
-    
+        data = self.__stream.read(size)
+        self.__offset += len(data)
+        return data
+
     async def seek(self, offset:int, whence:int = 0):
         if whence == 0:
             self.__offset = offset

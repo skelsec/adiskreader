@@ -44,10 +44,13 @@ class AttributeHeader:
         self.flags = None
         self.id = None
 
-    async def reparse(self, fs, include_data = False):
+    async def reparse(self, fs, include_data = False, include_index = False):
         # Reparse the attribute by reading data run references and re-reading the attribute
         # Do not use this on DATA attributes, as it will read the entire file into memory
         if include_data is False and self.type == 0x80:
+            return NTFS_ATTR_TYPE_MAP[self.type].from_header(self)
+        
+        if include_index is False and self.type == 0xA0:
             return NTFS_ATTR_TYPE_MAP[self.type].from_header(self)
         
         buff = io.BytesIO()
@@ -136,7 +139,8 @@ class ResidentAttribute(AttributeHeader):
         res.append('Indexed Flag: {}'.format(self.indexed_flag))
         res.append('Padding: {}'.format(self.padding))
         res.append('Name: {}'.format(self.name))
-        res.append('Data: {}'.format(self.data))
+        res.append('Data: {}'.format(self.data[:0x40]))
+        res.append('Size: {}'.format(len(self.data)))
         return '\n'.join(res)        
 
 class NonResidentAttribute(AttributeHeader):

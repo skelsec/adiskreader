@@ -19,7 +19,7 @@ It comes with an example console client to demonstrate the core features.
 
 | Raw | VHD | VHDX | VMDK |   |
 |-----|-----|------|------|---|
-| ✔️   | ❌   | ✔️    | ❌    |   |
+| ✔️   | ✔️   | ✔️    | ❌    |   |
 
 ## Partition
 

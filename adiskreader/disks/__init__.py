@@ -32,17 +32,38 @@ class Disk:
             if 'VHDX' in schemes:
                 from adiskreader.disks.vhdx import VHDXDisk
                 return await VHDXDisk.from_datasource(ds)
+            if 'VMDK' in schemes:
+                from adiskreader.disks.vmdk import VMDKDisk
+                return await VMDKDisk.from_datasource(ds)
+            if 'VHD' in schemes:
+                from adiskreader.disks.vhd import VHDDisk
+                return await VHDDisk.from_datasource(ds)
         
         if 'path' in ds.config:
-            if ds.config['path'].upper().endswith('.VHDX'):
-                from adiskreader.disks.vhdx import VHDXDisk
-                return await VHDXDisk.from_datasource(ds)
+            disktype = get_disk_for_extension(ds.config['path'])
+            if disktype is not None:
+                return await disktype.from_datasource(ds)
         
         if 'url' in ds.config:
-            if ds.config['url'].upper().endswith('.VHDX'):
-                from adiskreader.disks.vhdx import VHDXDisk
-                return await VHDXDisk.from_datasource(ds)
-        
+            disktype = get_disk_for_extension(ds.config['url'])
+            if disktype is not None:
+                return await disktype.from_datasource(ds)
+                
         # give up and try RAW
         return await RAWDisk.from_datasource(ds)
-            
+
+def get_disk_for_extension(extension:str):
+    extension = extension.upper()
+    if extension.endswith('VHDX') is True:
+        from adiskreader.disks.vhdx import VHDXDisk
+        return VHDXDisk
+    if extension.endswith('VHD') is True:
+        from adiskreader.disks.vhd import VHDDisk
+        return VHDDisk
+    if extension.endswith('VMDK') is True:
+        from adiskreader.disks.vmdk import VMDKDisk
+        return VMDKDisk
+    if extension.endswith('RAW') is True:
+        from adiskreader.disks.raw import RAWDisk
+        return RAWDisk
+    return None

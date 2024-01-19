@@ -63,6 +63,7 @@ class INDEX_ROOT(Attribute):
     def __str__(self):
         res = []
         res.append('Index Root')
+        res.append('Header: {}'.format(self.header))
         res.append('Attribute Type: {}'.format(self.attribute_type))
         res.append('Collation Rule: {}'.format(self.collation_rule))
         res.append('Bytes Per Record: {}'.format(self.bytes_per_record))
@@ -88,23 +89,44 @@ class INDEX_ALLOCATION(Attribute):
         # this must be obtained from the INDEX_ROOT attribute
         return si
     
-    def read_indicies(self, index_record_size, fs):
-        buffer = io.BytesIO(self.header.data)
-        buffer.seek(0, 0)
-        while buffer.tell() < self.header.real_size:
-            recdata = buffer.read(index_record_size)
-            if recdata == b'\x00' * index_record_size:
-                # empty index record
-                continue
-            if recdata == b'':
-                # end of data
-                break
-            ir = IndexRecord.from_bytes(recdata, fs)
-            yield ir
+    #def read_indicies(self, index_record_size, fs):
+    #    buffer = io.BytesIO(self.header.data)
+    #    buffer.seek(0, 0)
+    #    while buffer.tell() < self.header.real_size:
+    #        recdata = buffer.read(index_record_size)
+    #        if recdata == b'\x00' * index_record_size:
+    #            # empty index record
+    #            continue
+    #        if recdata == b'':
+    #            # end of data
+    #            break
+    #        ir = IndexRecord.from_bytes(recdata, fs)
+    #        yield ir
+    
+    async def read_indicies(self, index_record_size, fs):
+        # this record is ALWAYS non-resident
+        # therefore, we need to read the data from the data runs
+        # and parse the index records from there
+        data = b''
+        for cluster, size in self.header.data_runs:
+            for i in range(size):
+                data += await fs.read_cluster(cluster+i)
+                while len(data) >= index_record_size:
+                    recdata = data[0:index_record_size]
+                    data = data[index_record_size:]
+                    if recdata == b'\x00' * index_record_size:
+                        # empty index record
+                        continue
+                    if recdata == b'':
+                        # end of data
+                        break
+                    ir = IndexRecord.from_bytes(recdata, fs)
+                    yield ir
     
     def __str__(self):
         res = []
         res.append('INDEX_ALLOCATION')
+        res.append('Header: {}'.format(self.header))
         for index in self.index_records:
             res.append(str(index))
         return '\n'.join(res)

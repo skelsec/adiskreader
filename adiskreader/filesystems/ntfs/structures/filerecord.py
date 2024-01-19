@@ -244,7 +244,7 @@ class FileRecord:
                     raise Exception('Unknown attribute type: %s' % hex(attr.header.type))
             
             for attr in alloc_attrs:
-                for record in attr.read_indicies(index_record_size, self.__fs):
+                async for record in attr.read_indicies(index_record_size, self.__fs):
                     for index in record.entries:
                         if index.stream is not None:
                             fn = FILE_NAME.from_bytes(index.stream)
@@ -336,7 +336,7 @@ class FileRecord:
         if len(index_alloc) > 0:
             index_alloc = index_alloc[0] # there should only be one index alloc or none
 
-            for index in index_alloc.read_indicies(index_record_size, self.__fs):
+            async for index in index_alloc.read_indicies(index_record_size, self.__fs):
                 for index in index.entries:
                     if index.file_ref < 24:
                         # these are reserved
