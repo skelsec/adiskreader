@@ -48,13 +48,17 @@ class VHDDisk(Disk):
         data = await self.__stream.read(1024)
         self.dynamic_header = VHDDynamicHeader.from_bytes(data)
         await self.__stream.seek(self.dynamic_header.TableOffset, 0)
-        for _ in range(self.dynamic_header.MaxTableEntries):
-            data = await self.__stream.read(4)
+        tdata = await self.__stream.read(self.dynamic_header.MaxTableEntries * 4)
+        for i in range(len(tdata)//4):
+            data = tdata[i*4:(i+1)*4]
             self.BAT.append(int.from_bytes(data, byteorder='big'))
     
     async def read_block(self, block_index):
         if block_index in self.__block_cache:
             return self.__block_cache[block_index]
+        
+        if self.BAT[block_index] == 0xFFFFFFFF:
+            return b'\x00' * self.dynamic_header.BlockSize
         
         ActualSectorLocation = self.BAT[block_index] + self.dynamic_header.BlockBitmapSectorCount #because each block has a bitmap header which we don't need now
         await self.__stream.seek(ActualSectorLocation * 512)

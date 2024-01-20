@@ -47,6 +47,7 @@ setup(
 		'cachetools',
 		'winacl>=0.1.8',
 		'aiosmb>=0.4.10',
+        'amurex>=0.0.3',
         'prompt-toolkit>=3.0.2',
 		'tqdm',
 	],

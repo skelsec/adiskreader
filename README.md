@@ -13,7 +13,7 @@ It comes with an example console client to demonstrate the core features.
 
 | File | Gzip | SMB | SSH(SFTP) |   |
 |------|------|-----|-----------|---|
-| ✔️    | ✔️    | ✔️   | ❌         |   |
+| ✔️    | ✔️    | ✔️   | ✔️         |   |
 
 ## Disk
 
@@ -44,6 +44,9 @@ Interactive sample client that tries to automatically "mount" the disk image spe
 
 ### Parsing a VHDX file over SMB
 `adiskreader-console smb+ntlm-password://TEST\victim@10.10.10.2/sharename/foldername/disk.vhdx`  
+
+### Parsing a VHD file over SSH
+`adiskreader-console ssh+password+vhd://test:test@10.10.10.3/mnt/hgfs/vhdxtest/17763.737.amd64fre.rs5_release_svc_refresh.190906-2324_server_serverdatacentereval_en-us_1.vhd`  
 
 ### Parsing a local VHDX file
 `adiskreader-console file://C:\Users\test\images\test.vhdx`

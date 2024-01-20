@@ -34,6 +34,10 @@ class DataSource:
         if 'SMB' in schemes:
             from adiskreader.datasource.smb import SMBFileSource
             return await SMBFileSource.from_url(url)
+        
+        if 'SSH' in schemes:
+            from adiskreader.datasource.ssh import SSHFileSource
+            return await SSHFileSource.from_url(url)
 
         if 'FILE' in schemes:
             if 'GZ' in schemes or 'GZIP' in schemes:
