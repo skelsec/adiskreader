@@ -62,5 +62,10 @@ tests require installing guestmount
 
 # Kudos
 
+### FAT
 The FAT filesystem operations are provided by a modifyed verson of PyFATFs.
-Original project is licensed under MIT, can be found [here](https://github.com/nathanhi/pyfatfs/)
+Original project is licensed under MIT, can be found [here](https://github.com/nathanhi/pyfatfs/)  
+
+### Generic info
+This C# library is awesome sauce for all things disk reading/writing!
+https://github.com/DiscUtils/DiscUtils
