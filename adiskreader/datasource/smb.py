@@ -37,7 +37,7 @@ class SMBFileSource(DataSource):
         self.__size = self.__stream.size
 
         ###### DEBUG
-        asyncio.create_task(self.debug_total_read())
+        #asyncio.create_task(self.debug_total_read())
     
     async def read(self, size:int):
         self.__total_read += size

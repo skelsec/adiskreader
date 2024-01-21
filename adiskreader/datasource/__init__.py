@@ -27,9 +27,6 @@ class DataSource:
         url_e = urlparse(url)
         schemes = url_e.scheme.upper().split('+')
         connection_tags = schemes[0].split('-')
-        print(schemes)
-        print(connection_tags)
-        print(url_e)
 
         if 'SMB' in schemes:
             from adiskreader.datasource.smb import SMBFileSource
