@@ -25,16 +25,20 @@ class SMBFileSource(DataSource):
         return ds
     
     async def setup(self):
-        self.__factory = SMBConnectionFactory.from_url(self.config['url'])
-        self.__connection = self.__factory.get_connection()
-        _, err = await self.__connection.login()
-        if err is not None:
-            raise err
-        self.__stream = self.__factory.get_file()
-        _, err = await self.__stream.open(self.__connection)
-        if err is not None:
-            raise err
-        self.__size = self.__stream.size
+        if self.config['file'] is not None:
+            self.__stream = self.config['file']
+            self.__size = self.__stream.size
+        else:
+            self.__factory = SMBConnectionFactory.from_url(self.config['url'])
+            self.__connection = self.__factory.get_connection()
+            _, err = await self.__connection.login()
+            if err is not None:
+                raise err
+            self.__stream = self.__factory.get_file()
+            _, err = await self.__stream.open(self.__connection)
+            if err is not None:
+                raise err
+            self.__size = self.__stream.size
 
         ###### DEBUG
         #asyncio.create_task(self.debug_total_read())
@@ -71,5 +75,14 @@ class SMBFileSource(DataSource):
         config = {
             'url': url,
             'schemes': schemes,
+        }
+        return await SMBFileSource.from_config(config)
+    
+    @staticmethod
+    async def from_smb_file(smb_file):
+        config = {
+            'file': smb_file,
+            'url': None,
+            'schemes': ['SMB'],
         }
         return await SMBFileSource.from_config(config)

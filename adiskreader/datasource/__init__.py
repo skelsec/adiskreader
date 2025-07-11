@@ -28,7 +28,7 @@ class DataSource:
         schemes = url_e.scheme.upper().split('+')
         connection_tags = schemes[0].split('-')
 
-        if 'SMB' in schemes:
+        if 'SMB' in schemes or 'SMB2' in schemes or 'SMB3' in schemes or 'SMBQ' in schemes:
             from adiskreader.datasource.smb import SMBFileSource
             return await SMBFileSource.from_url(url)
         
