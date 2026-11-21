@@ -79,6 +79,12 @@ The images of the WIM file take the place of the partitions, `mount <index>` sel
 ### Parsing a gzipped raw disk image 
 `adiskreader-console file+gz:///home/user/images/test.gz.raw`
 
+## Native decompressors
+The XPRESS and LZX decompressors are written in Python, the optional `adiskreader_native` module (Rust) has the same ones about 50 times faster.
+It is used when it is installed, nothing else needs to be changed:  
+`pip install ./native/adiskreader_native` (needs a Rust toolchain)  
+Setting `ADISKREADER_NO_NATIVE=1` turns it off.
+
 ## Using the API
 At the moment there is no documentation, so you'll have to rely on the code itself :(
 

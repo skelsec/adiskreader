@@ -1,5 +1,5 @@
 import struct
-from adiskreader.compression import HuffmanDecoder, DecompressionError, copy_match
+from adiskreader.compression import HuffmanDecoder, DecompressionError, copy_match, with_native
 
 # LZX as used by the chunks of WIM files and of the files compressed by WOF.
 # Differences from the LZX of the CAB files: every chunk is compressed on its own, there is no header before
@@ -131,7 +131,7 @@ def lzx_read_lens(bits:LZXBits, lens:list, start:int, end:int):
         lens[i:i+run] = [value] * run
         i += run
 
-def lzx_decompress(data:bytes, out_size:int, window_size:int = 32768):
+def lzx_decompress_py(data:bytes, out_size:int, window_size:int = 32768):
     """Decompresses one chunk, out_size is the size of the result, window_size is the chunk size of the WIM"""
     num_main_syms = LZX_NUM_CHARS + lzx_num_offset_slots(window_size) * LZX_NUM_LEN_HEADERS
     main_lens = [0] * num_main_syms
@@ -249,3 +249,5 @@ def lzx_decompress(data:bytes, out_size:int, window_size:int = 32768):
 
     lzx_undo_e8(out)
     return bytes(out)
+
+lzx_decompress = with_native('lzx_decompress')(lzx_decompress_py)

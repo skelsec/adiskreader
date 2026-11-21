@@ -17,9 +17,9 @@ from wim_builder import build_wim, xpress_compress, lzx_compress
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
-from adiskreader.compression import DecompressionError
-from adiskreader.compression.xpress import xpress_decompress
-from adiskreader.compression.lzx import lzx_decompress
+from adiskreader.compression import DecompressionError, native
+from adiskreader.compression.xpress import xpress_decompress, xpress_decompress_py
+from adiskreader.compression.lzx import lzx_decompress, lzx_decompress_py
 from adiskreader.datasource.file import FileSource
 from adiskreader.datasource.fsfile import FSFileSource
 from adiskreader.filesystems.wim import WIM, WIMImage
@@ -41,6 +41,15 @@ IMAGES = [
         'other.bin' : bytes(range(256)) * 300,
         'onlystream' : (b'', {'s' : b'stream'}, -1),
     }, []),
+]
+
+# the decompressors written in python and the ones of the adiskreader_native module (native/adiskreader_native)
+needs_native = pytest.mark.skipif(native is None, reason='adiskreader_native is not installed')
+DECOMPRESSORS = [
+    pytest.param(xpress_compress, xpress_decompress_py, id='xpress-python'),
+    pytest.param(lzx_compress, lzx_decompress_py, id='lzx-python'),
+    pytest.param(xpress_compress, xpress_decompress, id='xpress-native', marks=needs_native),
+    pytest.param(lzx_compress, lzx_decompress, id='lzx-native', marks=needs_native),
 ]
 
 async def open_wim(path):
@@ -284,7 +293,7 @@ async def test_wim_solid_not_supported(tmp_path):
     finally:
         await ds.close()
 
-@pytest.mark.parametrize('compress, decompress', [(xpress_compress, xpress_decompress), (lzx_compress, lzx_decompress)])
+@pytest.mark.parametrize('compress, decompress', DECOMPRESSORS)
 def test_decompress(compress, decompress):
     rng = random.Random(5)
     alphabet = bytes(rng.randrange(256) for _ in range(40)) + b'\xe8' * 3
@@ -292,7 +301,7 @@ def test_decompress(compress, decompress):
         for data in [bytes(rng.choice(alphabet) for _ in range(size)), (b'abcabcabd' * 4000)[:size], b'\x00' * size]:
             assert decompress(compress(data, rng), len(data)) == data
 
-@pytest.mark.parametrize('compress, decompress', [(xpress_compress, xpress_decompress), (lzx_compress, lzx_decompress)])
+@pytest.mark.parametrize('compress, decompress', DECOMPRESSORS)
 def test_decompress_damaged(compress, decompress):
     # damaged data either fails with DecompressionError or gives data of the expected size
     rng = random.Random(6)
@@ -310,3 +319,33 @@ def test_decompress_damaged(compress, decompress):
             assert len(decompress(bytes(damaged), len(data))) == len(data)
         except DecompressionError:
             pass
+
+@needs_native
+@pytest.mark.parametrize('compress, decompress, decompress_py', [
+    (xpress_compress, xpress_decompress, xpress_decompress_py),
+    (lzx_compress, lzx_decompress, lzx_decompress_py),
+])
+def test_decompress_native_same(compress, decompress, decompress_py):
+    # the native decompressors accept and reject the same input as the python ones
+    def run(func, data, size):
+        try:
+            return func(data, size)
+        except (DecompressionError, IndexError):
+            return None
+
+    assert decompress is not decompress_py
+    rng = random.Random(7)
+    words = [bytes(rng.randrange(256) for _ in range(rng.randint(1, 9))) for _ in range(50)]
+    for size in [1, 300, 5000, 32768]:
+        data = b''.join(rng.choice(words) for _ in range(size))[:size]
+        compressed = compress(data, rng)
+        assert decompress(compressed, size) == data
+        for i in range(200):
+            damaged = bytearray(compressed)
+            if i % 3 == 0:
+                damaged = damaged[:rng.randrange(len(damaged))]
+            else:
+                for _ in range(rng.randint(1, 4)):
+                    damaged[rng.randrange(len(damaged))] = rng.randrange(256)
+            out_size = size if i % 5 != 0 else rng.randint(1, 40000)
+            assert run(decompress, bytes(damaged), out_size) == run(decompress_py, bytes(damaged), out_size)

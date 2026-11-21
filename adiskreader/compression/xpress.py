@@ -1,4 +1,4 @@
-from adiskreader.compression import HuffmanDecoder, DecompressionError, copy_match
+from adiskreader.compression import HuffmanDecoder, DecompressionError, copy_match, with_native
 
 # XPRESS with Huffman coding (MS-XCA 2.2), as used by the chunks of WIM files and of the files compressed by WOF
 
@@ -6,7 +6,7 @@ XPRESS_NUM_SYMBOLS = 512
 XPRESS_MIN_MATCH = 3
 XPRESS_TABLE_BITS = 11
 
-def xpress_decompress(data:bytes, out_size:int):
+def xpress_decompress_py(data:bytes, out_size:int):
     """Decompresses one chunk which starts with its Huffman code lengths, out_size is the size of the result"""
     if len(data) < XPRESS_NUM_SYMBOLS // 2:
         raise DecompressionError('XPRESS data is too short')
@@ -68,3 +68,5 @@ def xpress_decompress(data:bytes, out_size:int):
     if len(out) != out_size:
         raise DecompressionError('XPRESS match is longer than the output')
     return bytes(out)
+
+xpress_decompress = with_native('xpress_decompress')(xpress_decompress_py)

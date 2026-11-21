@@ -1,6 +1,33 @@
 
+import os
+
 class DecompressionError(Exception):
     pass
+
+# The decompressors have a native version in the optional adiskreader_native module (native/adiskreader_native),
+# it is used when it can be imported. ADISKREADER_NO_NATIVE=1 turns it off.
+native = None
+if os.environ.get('ADISKREADER_NO_NATIVE', '0') in ('', '0'):
+    try:
+        import adiskreader_native as native
+    except ImportError:
+        native = None
+
+def with_native(name:str):
+    """Makes the decorated decompressor call the function of the native module with the same name, if there is one"""
+    def decorator(func):
+        native_func = getattr(native, name, None)
+        if native_func is None:
+            return func
+        def wrapper(*args, **kwargs):
+            try:
+                return native_func(*args, **kwargs)
+            except ValueError as e:
+                raise DecompressionError(str(e))
+        wrapper.__doc__ = func.__doc__
+        wrapper.__name__ = name
+        return wrapper
+    return decorator
 
 class HuffmanDecoder:
     """

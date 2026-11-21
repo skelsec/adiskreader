@@ -166,3 +166,4 @@ tests/testfiles/diff/
 *.wim
 *.swm
 tests/testfiles/wimwin/
+native/*/target/
