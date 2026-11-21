@@ -77,11 +77,11 @@ After changing an image, regenerate them (needs 7z, no root):
 python make_manifest.py
 ```
 
-SMB:
-`test_smb.py` is skipped unless `ADISKREADER_SMB_URL` points to a share holding the decompressed test images.
-To use a local samba container (needs docker, listens on 127.0.0.1:4445 only):
+SMB and SSH:
+`test_smb.py` and `test_ssh.py` are skipped unless `ADISKREADER_SMB_URL` / `ADISKREADER_SSH_URL` point to a share / directory holding the decompressed test images.
+To use a local samba and sshd container (needs docker, listens on 127.0.0.1:4445 and 127.0.0.1:2222 only):
 ```
 eval "$(smb/start.sh)"
-pytest test_smb.py
+pytest test_smb.py test_ssh.py
 docker stop adiskreader-smb
 ```

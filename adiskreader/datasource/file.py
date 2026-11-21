@@ -1,5 +1,5 @@
 import os
-from adiskreader.datasource import DataSource
+from adiskreader.datasource import DataSource, sibling_parts, sibling_url
 from urllib.parse import urlparse, parse_qs
 
 class FileSource(DataSource):
@@ -46,6 +46,13 @@ class FileSource(DataSource):
     
     async def tell(self):
         return self.__offset
+
+    async def open_sibling(self, name:str):
+        parts = sibling_parts(name)
+        config = self.sibling_config(path = os.path.join(os.path.dirname(self.config['path']), *parts))
+        if 'url' in config:
+            config['url'] = sibling_url(config['url'], parts)
+        return await FileSource.from_config(config)
     
     @staticmethod
     async def from_url(url:str):

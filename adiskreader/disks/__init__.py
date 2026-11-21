@@ -1,3 +1,4 @@
+from urllib.parse import urlparse
 from adiskreader.partitions import Partition, PartitionFinder
 
 class Disk:
@@ -45,7 +46,8 @@ class Disk:
                 return await disktype.from_datasource(ds)
         
         if 'url' in ds.config:
-            disktype = get_disk_for_extension(ds.config['url'])
+            # the parameters of the url are not part of the file name
+            disktype = get_disk_for_extension(urlparse(ds.config['url']).path)
             if disktype is not None:
                 return await disktype.from_datasource(ds)
                 

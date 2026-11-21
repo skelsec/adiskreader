@@ -52,3 +52,16 @@ async def check_file_ops(fs, manifest):
 			size = rng.randint(0, fsize-pos)
 			data = await fs_read(ffile, pos, size)
 			assert data == odata[pos:pos+size]
+
+
+async def check_sibling(ds, sibling, filepath):
+    """sibling is opened from ds and reads the file at filepath, independently of ds"""
+    with open(filepath, 'rb') as f:
+        expected = f.read()
+    assert type(sibling) is type(ds)
+    offset = await ds.tell()
+    await sibling.seek(0x100000, 0)
+    assert await sibling.read(4096) == expected[0x100000:0x101000]
+    await sibling.seek(-100, 2)
+    assert await sibling.read(100) == expected[-100:]
+    assert await ds.tell() == offset

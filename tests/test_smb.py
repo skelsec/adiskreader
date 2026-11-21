@@ -86,3 +86,30 @@ async def test_smb_ntfs(image, disktype):
         await check_file_ops(fs, manifest)
     finally:
         await ds.close()
+
+@pytest.mark.asyncio
+async def test_smb_open_sibling():
+    filepath = get_image(NTFS_TEST_FILE_GZ)
+    get_image(VFAT_16_TEST_FILE_GZ)
+    ds = await SMBFileSource.from_url(get_url(VFAT_16_TEST_FILE_GZ))
+    try:
+        sibling = await ds.open_sibling(filepath.name)
+        try:
+            assert sibling.config['url'] == get_url(NTFS_TEST_FILE_GZ)
+            await check_sibling(ds, sibling, filepath)
+            # siblings can open siblings, the .. in the path is resolved by the datasource
+            sibling2 = await sibling.open_sibling('.\\sub\\..\\' + filepath.name)
+            try:
+                await check_sibling(sibling, sibling2, filepath)
+            finally:
+                await sibling2.close()
+        finally:
+            await sibling.close()
+        # closing the sibling keeps the connection open
+        assert len(await ds.read(512)) == 512
+        with pytest.raises(Exception):
+            await ds.open_sibling('doesnotexist.img')
+        with pytest.raises(Exception, match='outside of the share'):
+            await ds.open_sibling('..\\' + filepath.name)
+    finally:
+        await ds.close()

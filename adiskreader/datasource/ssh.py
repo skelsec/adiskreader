@@ -1,7 +1,9 @@
 import asyncio
+import posixpath
 from urllib.parse import urlparse, parse_qs
-from adiskreader.datasource import DataSource
+from adiskreader.datasource import DataSource, sibling_parts, sibling_url
 from amurex.common.factory import SSHConnectionFactory
+from amurex.common.settings import SSHClientSettings
 import traceback
 
 class SSHFileSource(DataSource):
@@ -9,6 +11,8 @@ class SSHFileSource(DataSource):
     def __init__(self, config):
         super().__init__(config)
         self.__factory = None
+        self.__sftp = None
+        self.__path = None
         self.__stream = None
         self.__size = None
         self.__offset = 0
@@ -26,17 +30,30 @@ class SSHFileSource(DataSource):
         return ds
     
     async def setup(self):
-        self.__factory = SSHConnectionFactory.from_url(self.config['url'])
-        client = self.__factory.get_client()
-        _, err = await client.connect()
-        if err is not None:
-            raise err
-        
-        sftp, err = await client.get_sftp()
-        if err is not None:
-            raise err
-        
-        self.__stream, err = await sftp.open(self.__factory.get_target().path, 'rb')
+        if 'sftp' in self.config and self.config['sftp'] is not None:
+            # sibling file, using the session of the datasource which opened it
+            self.__sftp = self.config['sftp']
+            self.__path = self.config['path']
+        else:
+            self.__factory = SSHConnectionFactory.from_url(self.config['url'])
+            # host key verification is controlled by the known_hosts=<file> and verify=false url parameters
+            query = parse_qs(urlparse(self.config['url']).query)
+            settings = SSHClientSettings()
+            if 'known_hosts' in query:
+                settings.known_hosts.load_file(query['known_hosts'][0])
+            if 'verify' in query:
+                settings.skip_hostkey_verification = query['verify'][0].lower() in ['0', 'false', 'no']
+            client = self.__factory.get_client(settings)
+            _, err = await client.connect()
+            if err is not None:
+                raise err
+
+            self.__sftp, err = await client.get_sftp()
+            if err is not None:
+                raise err
+            self.__path = self.__factory.get_target().path
+
+        self.__stream, err = await self.__sftp.open(self.__path, 'rb')
         if err is not None:
             raise err
         
@@ -79,6 +96,15 @@ class SSHFileSource(DataSource):
     
     async def tell(self):
         return self.__offset
+
+    async def open_sibling(self, name:str):
+        parts = sibling_parts(name)
+        config = self.sibling_config(
+            sftp = self.__sftp,
+            path = posixpath.join(posixpath.dirname(self.__path), *parts),
+            url = sibling_url(self.config['url'], parts),
+        )
+        return await SSHFileSource.from_config(config)
 
     @staticmethod
     async def from_url(url:str):
