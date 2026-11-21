@@ -110,8 +110,8 @@ python wim_builder.py source /tmp/wimsrc
 (cd /tmp/wimsrc && 7z a -twim ../wim_test.wim .)
 gzip -9 wim_test.wim
 ```
-The XPRESS and LZX compressed versions are built from it by `wim_builder.py` when the tests run (7z reads them, `test_wim_7z` checks it),
-as well as the files with more images, named data streams and more parts.
+The XPRESS, LZX and LZMS compressed versions are built from it by `wim_builder.py` when the tests run (7z reads them, `test_wim_7z` checks it),
+as well as the files with more images, named data streams, more parts and solid resources (ESD).
 WIM files made by Windows (DISM) are created by `make_wim.ps1`: run it in an elevated PowerShell on a Windows host and
 copy the zip it creates to `testfiles/adiskreader_wim_fixtures.zip`; `test_wim_windows.py` is skipped without it.
 

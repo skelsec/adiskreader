@@ -40,9 +40,11 @@ Disk images stored inside another image can be opened with `FSFileSource`.
 
 ## Archive
 
-| WIM (uncompressed, XPRESS, LZX) | Split WIM (SWM) | ESD (LZMS, solid) |
-|---------------------------------|-----------------|-------------------|
-| ✔️                               | ✔️               | ❌                 |
+| WIM (uncompressed, XPRESS, LZX, LZMS) | Split WIM (SWM) | ESD (LZMS, solid) |
+|---------------------------------------|-----------------|-------------------|
+| ✔️                                     | ✔️               | ✔️                 |
+
+ESD: the solid resources are decompressed in chunks of up to 64 MB, reading a file needs the whole chunk it is stored in. Encrypted ESD files are not supported.
 
 ## Optical disc image (iso)
 
@@ -95,7 +97,7 @@ The filesystems of the image (UDF, ISO9660 with Rock Ridge, Joliet) take the pla
 `adiskreader-console file+gz:///home/user/images/test.gz.raw`
 
 ## Native decompressors
-The XPRESS and LZX decompressors are written in Python, the optional `adiskreader_native` module (Rust) has the same ones about 50 times faster.
+The XPRESS, LZX and LZMS decompressors are written in Python, the optional `adiskreader_native` module (Rust) has the same ones about 50 times faster.
 It is used when it is installed, nothing else needs to be changed:  
 `pip install ./native/adiskreader_native` (needs a Rust toolchain)  
 Setting `ADISKREADER_NO_NATIVE=1` turns it off.

@@ -39,7 +39,7 @@ VMDK_SNAPSHOT2_WRITES = [
 # ntfs image holding diff_vhd_base.vhd and diff_vhd_child1.vhd of the differencing chains, for reading disks stored in a filesystem
 NESTED_NTFS_TEST_FILE_GZ = 'testfiles/nested_ntfs.img.gz'
 
-# wim file without compression made by 7z, the xpress and lzx compressed ones are built from it (wim_builder.py)
+# wim file without compression made by 7z, the xpress, lzx and lzms compressed ones are built from it (wim_builder.py)
 WIM_TEST_FILE_GZ = 'testfiles/wim_test.wim.gz'
 
 # differencing vhd / vhdx chains made by Windows with make_diff_vhd.ps1, with the contents Windows reads from each disk
@@ -89,7 +89,7 @@ def get_image(image_gz, compressed = False):
 	return decompress_gzip(image_gz_path)
 
 def get_wim_image(compression = None):
-	"""Returns the path of the test wim file, compression is None, 'xpress' or 'lzx'"""
+	"""Returns the path of the test wim file, compression is None, 'xpress', 'lzx' or 'lzms'"""
 	path = get_image(WIM_TEST_FILE_GZ)
 	if compression is None:
 		return path

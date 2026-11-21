@@ -2,7 +2,7 @@
 name = "adiskreader_native"
 version = "0.1.0"
 edition = "2021"
-description = "Native decompressors (XPRESS, LZX) for adiskreader"
+description = "Native decompressors (XPRESS, LZX, LZMS) for adiskreader"
 license = "MIT"
 
 [lib]

@@ -18,8 +18,8 @@ from adiskreader.filesystems.wim.structures import WIMFileAttribute
 
 pytestmark = pytest.mark.skipif(has_wim_fixtures() is False, reason='WIM files made by Windows are not available')
 
-# name in the manifest -> compression
-WIMS = {'none' : None, 'fast' : 'XPRESS', 'max' : 'LZX', 'split' : 'LZX'}
+# name in the manifest -> compression, the recovery ones are ESD files (solid resources)
+WIMS = {'none' : None, 'fast' : 'XPRESS', 'max' : 'LZX', 'split' : 'LZX', 'recovery' : 'LZMS', 'recovery2' : 'LZMS'}
 # the other attributes are up to DISM
 CHECKED_ATTRIBUTES = WIMFileAttribute.READONLY | WIMFileAttribute.HIDDEN | WIMFileAttribute.DIRECTORY
 
@@ -58,6 +58,8 @@ async def check_tree(fs, tree):
 @pytest.mark.parametrize('name', list(WIMS))
 async def test_wim_windows(name):
     path, expected, trees = get_wim(name)
+    if path is None:
+        pytest.skip('Not in the fixtures')
     ds = await FileSource.from_file(str(path))
     wim = await WIM.from_datasource(ds)
     try:
@@ -88,19 +90,4 @@ async def test_wim_windows_hardlink():
         assert first.st_ino != (await fs.stat('text.txt')).st_ino
     finally:
         await wim.close()
-        await ds.close()
-
-@pytest.mark.asyncio
-async def test_wim_windows_esd():
-    # LZMS and solid resources are not supported yet, the file must be recognized
-    path, expected, _ = get_wim('recovery')
-    if path is None:
-        pytest.skip('No ESD file in the fixtures')
-    ds = await FileSource.from_file(str(path))
-    try:
-        assert await WIM.is_wim(ds) is True
-        with pytest.raises(NotImplementedError):
-            wim = await WIM.from_datasource(ds)
-            await wim.mount(1)
-    finally:
         await ds.close()

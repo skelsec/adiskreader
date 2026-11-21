@@ -1,13 +1,14 @@
 """
 Builds compressed WIM files. 7z can only create WIM files without compression, this recompresses such a file
-with XPRESS or LZX. The compressors here are made to use every feature of the formats (all block types of LZX,
-recent offsets, long matches, chunks stored without compression), not to compress well.
+with XPRESS, LZX or LZMS. The compressors here are made to use every feature of the formats (all block types of LZX,
+recent offsets, long matches, chunks stored without compression, delta matches of LZMS), not to compress well.
 7z can read the result, test_wim.py compares against it when it is installed.
 
-Usage: python wim_builder.py <uncompressed wim> <xpress|lzx> <output wim>
+Usage: python wim_builder.py <uncompressed wim> <xpress|lzx|lzms> <output wim>
        python wim_builder.py source <directory>      writes the files testfiles/wim_test.wim is made of
 """
 
+import bisect
 import hashlib
 import heapq
 import os
@@ -15,14 +16,27 @@ import random
 import struct
 import sys
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+
+# the Huffman codes of LZMS are built from the frequencies of the symbols, the same way by both sides
+from adiskreader.compression.lzms import lzms_code_lengths, lzms_num_offset_slots, LZMSBitContext, \
+	LZMS_OFFSET_SLOT_BASE, LZMS_EXTRA_OFFSET_BITS, LZMS_LENGTH_SLOT_BASE, LZMS_EXTRA_LENGTH_BITS
+
 WIM_HEADER_SIZE = 208
 LOOKUP_ENTRY_SIZE = 50
 CHUNK_SIZE = 32768
 RESHDR_METADATA = 0x02
 RESHDR_COMPRESSED = 0x04
+RESHDR_SOLID = 0x10
 HDR_COMPRESSION = 0x2
 HDR_COMPRESS_XPRESS = 0x20000
 HDR_COMPRESS_LZX = 0x40000
+HDR_COMPRESS_LZMS = 0x80000
+HDR_COMPRESS_FLAGS = {'xpress' : HDR_COMPRESS_XPRESS, 'lzx' : HDR_COMPRESS_LZX, 'lzms' : HDR_COMPRESS_LZMS}
+WIM_VERSION_DEFAULT = 0x10d00
+WIM_VERSION_SOLID = 0xe00
+SOLID_RESOURCE_MAGIC = 0x100000000
+SOLID_FORMATS = {None : 0, 'xpress' : 1, 'lzx' : 2, 'lzms' : 3}
 
 LZX_MAGIC_FILESIZE = 12000000
 LZX_MAX_MATCH = 257
@@ -371,6 +385,282 @@ def lzx_compress(data, rng):
 	return bytes(writer.out)
 
 
+class LZMSRangeEncoder:
+	"""The bits deciding the type of the items, written to 16 bit words from the beginning of the data"""
+	def __init__(self):
+		self.low = 0
+		self.range = 0xFFFFFFFF
+		self.cache = 0
+		self.cache_size = 1
+		self.started = False
+		self.words = []
+
+	def shift_low(self):
+		if (self.low & 0xFFFFFFFF) < 0xFFFF0000 or (self.low >> 32) != 0:
+			carry = self.low >> 32
+			while self.cache_size > 0:
+				# the first word would be always zero, it is not stored
+				if self.started is True:
+					self.words.append((self.cache + carry) & 0xFFFF)
+				self.started = True
+				self.cache = 0xFFFF
+				self.cache_size -= 1
+			self.cache = (self.low >> 16) & 0xFFFF
+		self.cache_size += 1
+		self.low = (self.low & 0xFFFF) << 16
+
+	def encode(self, ctx, bit):
+		if self.range <= 0xFFFF:
+			self.range <<= 16
+			self.shift_low()
+		state = ctx.state
+		zero_bits = ctx.zero_bits[state]
+		bound = (self.range >> 6) * min(max(zero_bits, 1), 63)
+		if bit == 0:
+			self.range = bound
+		else:
+			self.low += bound
+			self.range -= bound
+		recent_bits = ctx.recent_bits[state]
+		ctx.zero_bits[state] = zero_bits + (recent_bits >> 63) - bit
+		ctx.recent_bits[state] = ((recent_bits << 1) | bit) & 0xFFFFFFFFFFFFFFFF
+		ctx.state = ((state << 1) | bit) & ctx.mask
+
+	def flush(self):
+		for _ in range(4):
+			self.shift_low()
+
+class LZMSBitWriter:
+	"""The Huffman codes and the extra bits, their words are stored from the end of the data backwards"""
+	def __init__(self):
+		self.words = []
+		self.bitbuf = 0
+		self.bitcnt = 0
+
+	def write(self, value, count):
+		self.bitbuf = (self.bitbuf << count) | value
+		self.bitcnt += count
+		while self.bitcnt >= 16:
+			self.bitcnt -= 16
+			self.words.append((self.bitbuf >> self.bitcnt) & 0xFFFF)
+		self.bitbuf &= (1 << self.bitcnt) - 1
+
+	def flush(self):
+		if self.bitcnt > 0:
+			self.write(0, 16 - self.bitcnt)
+
+class LZMSEncoderCode:
+	"""Huffman code following the frequencies of the symbols written with it"""
+	def __init__(self, writer, num_syms, rebuild_freq):
+		self.writer = writer
+		self.freqs = [1] * num_syms
+		self.rebuild_freq = rebuild_freq
+		self.until_rebuild = rebuild_freq
+		self.codes = huffman_codes(lzms_code_lengths(self.freqs))
+
+	def write(self, symbol):
+		self.writer.write(*self.codes[symbol])
+		self.freqs[symbol] += 1
+		self.until_rebuild -= 1
+		if self.until_rebuild == 0:
+			self.codes = huffman_codes(lzms_code_lengths(self.freqs))
+			self.freqs = [(freq >> 1) + 1 for freq in self.freqs]
+			self.until_rebuild = self.rebuild_freq
+
+def lzms_do_x86(data):
+	"""Replaces the relative targets of the x86 instructions with absolute ones where the data looks like machine code"""
+	data = bytearray(data)
+	size = len(data)
+	if size <= 17:
+		return data
+	last_target_usages = [-65536] * 65536
+	last_x86_pos = -1024
+	i = 1
+	while i < size - 16:
+		opcode = data[i]
+		opcode_size = 0
+		max_trans_offset = 1023
+		if opcode == 0x48:
+			if (data[i+1] == 0x8B and data[i+2] in (0x05, 0x0D)) or (data[i+1] == 0x8D and data[i+2] & 0x7 == 0x5):
+				opcode_size = 3
+		elif opcode == 0x4C:
+			if data[i+1] == 0x8D and data[i+2] & 0x7 == 0x5:
+				opcode_size = 3
+		elif opcode == 0xE8:
+			opcode_size = 1
+			max_trans_offset = 511
+		elif opcode == 0xE9:
+			i += 5
+			continue
+		elif opcode == 0xF0:
+			if data[i+1] == 0x83 and data[i+2] == 0x05:
+				opcode_size = 3
+		elif opcode == 0xFF:
+			if data[i+1] == 0x15:
+				opcode_size = 2
+		if opcode_size == 0:
+			i += 1
+			continue
+		operand = i + opcode_size
+		target = (i + data[operand] + (data[operand+1] << 8)) & 0xFFFF
+		if i - last_x86_pos <= max_trans_offset:
+			value = (int.from_bytes(data[operand:operand+4], 'little') + i) & 0xFFFFFFFF
+			data[operand:operand+4] = value.to_bytes(4, 'little')
+		i += opcode_size + 3
+		if i - last_target_usages[target] <= 65535:
+			last_x86_pos = i
+		last_target_usages[target] = i
+		i += 1
+	return data
+
+def lzms_compress(data, rng, stats = None):
+	"""stats: dict getting the number of the items of each kind"""
+	size = len(data)
+	data = lzms_do_x86(data)
+	encoder = LZMSRangeEncoder()
+	writer = LZMSBitWriter()
+	offset_slots = lzms_num_offset_slots(size)
+	literal_code = LZMSEncoderCode(writer, 256, 1024)
+	lz_offset_code = LZMSEncoderCode(writer, offset_slots, 1024)
+	length_code = LZMSEncoderCode(writer, 54, 512)
+	delta_offset_code = LZMSEncoderCode(writer, offset_slots, 1024)
+	delta_power_code = LZMSEncoderCode(writer, 8, 512)
+	main_ctx = LZMSBitContext(16)
+	match_ctx = LZMSBitContext(32)
+	lz_ctx = LZMSBitContext(64)
+	lz_rep_ctx = [LZMSBitContext(64), LZMSBitContext(64)]
+	delta_ctx = LZMSBitContext(64)
+	delta_rep_ctx = [LZMSBitContext(64), LZMSBitContext(64)]
+
+	def count(name):
+		if stats is not None:
+			stats[name] = stats.get(name, 0) + 1
+
+	def write_slot(code, bases, extra, value, slots):
+		slot = min(bisect.bisect_right(bases, value), slots) - 1
+		code.write(slot)
+		writer.write(value - bases[slot], extra[slot])
+
+	def write_rep(contexts, index):
+		for i in range(index):
+			encoder.encode(contexts[i], 1)
+		if index < 2:
+			encoder.encode(contexts[index], 0)
+
+	def lz_length(pos, offset):
+		length = 0
+		while pos + length < size and data[pos + length - offset] == data[pos + length]:
+			length += 1
+		return length
+
+	def delta_length(pos, power, raw_offset):
+		span = 1 << power
+		offset = raw_offset << power
+		if offset + span > pos:
+			return 0
+		length = 0
+		while pos + length < size:
+			p = pos + length
+			if data[p] != (data[p - offset] + data[p - span] - data[p - offset - span]) & 0xFF:
+				break
+			length += 1
+		return length
+
+	# the queues of the last offsets, as the decompressor has them: a match gets to its queue after the next item only
+	recent_offsets = [1, 2, 3, 4]
+	recent_deltas = [(0, 1), (0, 2), (0, 3), (0, 4)]
+	prev_lz = 0
+	prev_delta = 0
+	last = {}
+	pos = 0
+	while pos < size:
+		# (length, kind, position in the queue or None, offset or (power, raw offset))
+		best = (0, None, None, None)
+		for index in range(3):
+			offset = recent_offsets[index + prev_lz]
+			if offset <= pos:
+				length = lz_length(pos, offset)
+				if length >= 2 and length > best[0]:
+					best = (length, 'lz', index, offset)
+		prev = last.get(bytes(data[pos:pos+3]))
+		if prev is not None:
+			length = lz_length(pos, pos - prev)
+			if length >= 3 and length > best[0]:
+				best = (length, 'lz', None, pos - prev)
+		for index in range(3):
+			length = delta_length(pos, *recent_deltas[index + prev_delta])
+			if length >= 2 and length > best[0]:
+				best = (length, 'delta', index, recent_deltas[index + prev_delta])
+		if best[0] < 4:
+			candidates = [(power, raw_offset) for power in range(4) for raw_offset in (1, 2)]
+			candidates.append((rng.randrange(8), rng.randint(1, 50)))
+			for pair in candidates:
+				length = delta_length(pos, *pair)
+				if length >= 4 and length > best[0]:
+					best = (length, 'delta', None, pair)
+
+		length, kind, index, value = best
+		# some of the matches are made shorter or skipped to have all kinds of them
+		if length > 0 and rng.random() < 0.1:
+			length = rng.randint(1, length)
+		if length > 0 and rng.random() < 0.03:
+			length = 0
+
+		if length == 0:
+			encoder.encode(main_ctx, 0)
+			literal_code.write(data[pos])
+			count('literal')
+			prev_lz = 0
+			prev_delta = 0
+			length = 1
+		elif kind == 'lz':
+			encoder.encode(main_ctx, 1)
+			encoder.encode(match_ctx, 0)
+			if index is None:
+				encoder.encode(lz_ctx, 0)
+				write_slot(lz_offset_code, LZMS_OFFSET_SLOT_BASE, LZMS_EXTRA_OFFSET_BITS, value, offset_slots)
+				recent_offsets.pop()
+				count('lz')
+			else:
+				encoder.encode(lz_ctx, 1)
+				write_rep(lz_rep_ctx, index)
+				recent_offsets[index + prev_lz] = recent_offsets[index]
+				del recent_offsets[index]
+				count('lz_rep%s%s' % (index, '_delayed' if prev_lz == 1 else ''))
+			recent_offsets.insert(0, value)
+			prev_lz = 1
+			prev_delta = 0
+			write_slot(length_code, LZMS_LENGTH_SLOT_BASE, LZMS_EXTRA_LENGTH_BITS, length, 54)
+		else:
+			encoder.encode(main_ctx, 1)
+			encoder.encode(match_ctx, 1)
+			if index is None:
+				encoder.encode(delta_ctx, 0)
+				delta_power_code.write(value[0])
+				write_slot(delta_offset_code, LZMS_OFFSET_SLOT_BASE, LZMS_EXTRA_OFFSET_BITS, value[1], offset_slots)
+				recent_deltas.pop()
+				count('delta')
+			else:
+				encoder.encode(delta_ctx, 1)
+				write_rep(delta_rep_ctx, index)
+				recent_deltas[index + prev_delta] = recent_deltas[index]
+				del recent_deltas[index]
+				count('delta_rep%s%s' % (index, '_delayed' if prev_delta == 1 else ''))
+			recent_deltas.insert(0, value)
+			prev_lz = 0
+			prev_delta = 1
+			write_slot(length_code, LZMS_LENGTH_SLOT_BASE, LZMS_EXTRA_LENGTH_BITS, length, 54)
+
+		for i in range(pos, min(pos + length, pos + 64)):
+			last[bytes(data[i:i+3])] = i
+		pos += length
+
+	encoder.flush()
+	writer.flush()
+	words = encoder.words + writer.words[::-1]
+	return struct.pack('<%dH' % len(words), *words)
+
+
 def compress_resource(data, compress, rng):
 	"""Returns the resource as stored in the WIM file and whether it is compressed"""
 	chunks = []
@@ -389,6 +679,19 @@ def compress_resource(data, compress, rng):
 		return data, False
 	return res, True
 
+COMPRESSORS = {None : None, 'xpress' : xpress_compress, 'lzx' : lzx_compress, 'lzms' : lzms_compress}
+
+def build_solid_resource(data, compression, chunk_size, rng):
+	"""Solid resource: size of the data, chunk size and compression, then the sizes of the chunks and the chunks"""
+	compress = COMPRESSORS[compression]
+	chunks = []
+	for offset in range(0, len(data), chunk_size):
+		chunk = data[offset:offset+chunk_size]
+		cdata = compress(chunk, rng) if compress is not None else chunk
+		chunks.append(cdata if len(cdata) < len(chunk) else chunk)
+	res = struct.pack('<QII', len(data), chunk_size, SOLID_FORMATS[compression])
+	return res + b''.join(struct.pack('<I', len(chunk)) for chunk in chunks) + b''.join(chunks)
+
 def pack_reshdr(size, flags, offset, original_size):
 	return size.to_bytes(7, 'little') + bytes([flags]) + struct.pack('<QQ', offset, original_size)
 
@@ -399,7 +702,7 @@ def unpack_reshdr(data):
 def build_compressed_wim(source, compression, seed = 0):
 	"""source is the contents of a WIM file without compression, returns the contents of the compressed one"""
 	rng = random.Random(seed)
-	compress = {'xpress' : xpress_compress, 'lzx' : lzx_compress}[compression]
+	compress = COMPRESSORS[compression]
 	header = bytearray(source[:WIM_HEADER_SIZE])
 	flags, chunk_size = struct.unpack('<II', header[16:24])
 	if header[:8] != b'MSWIM\x00\x00\x00' or flags & HDR_COMPRESSION:
@@ -424,7 +727,7 @@ def build_compressed_wim(source, compression, seed = 0):
 	# no boot metadata and integrity table
 	header[96:120] = b'\x00' * 24
 	header[124:148] = b'\x00' * 24
-	flags |= HDR_COMPRESSION | (HDR_COMPRESS_XPRESS if compression == 'xpress' else HDR_COMPRESS_LZX)
+	flags |= HDR_COMPRESSION | HDR_COMPRESS_FLAGS[compression]
 	header[16:24] = struct.pack('<II', flags, CHUNK_SIZE)
 	out[:WIM_HEADER_SIZE] = header
 	return bytes(out)
@@ -495,15 +798,17 @@ def build_metadata(tree, security_descriptors, blobs):
 		out += b'\x00' * 8
 	return bytes(out)
 
-def build_wim(images, compression = None, parts = 1, seed = 0):
+def build_wim(images, compression = None, parts = 1, seed = 0, solid = None):
 	"""
 	Builds a WIM file from scratch, for the features the files made by 7z do not have: more images,
-	named data streams, security descriptors, split files.
+	named data streams, security descriptors, split files, solid resources.
 	images: [(name, tree, security descriptors)], see build_metadata for the tree.
+	solid: (compression, chunk size, number of resources, number of runs), the contents of the files are stored
+	in solid resources as in the ESD files. A run is the resources the offsets of the data are counted in.
 	Returns the contents of each part.
 	"""
 	rng = random.Random(seed)
-	compress = {None : None, 'xpress' : xpress_compress, 'lzx' : lzx_compress}[compression]
+	compress = COMPRESSORS[compression]
 	blobs = {}
 	metadata = [build_metadata(tree, security_descriptors, blobs) for _, tree, security_descriptors in images]
 	xml = '<WIM>'
@@ -516,24 +821,57 @@ def build_wim(images, compression = None, parts = 1, seed = 0):
 	resources = [[] for _ in range(parts)]
 	for data in metadata:
 		resources[0].append((hashlib.sha1(data).digest(), data, RESHDR_METADATA))
-	for index, (datahash, data) in enumerate(blobs.items()):
-		resources[index % parts].append((datahash, data, 0))
+	if solid is None:
+		for index, (datahash, data) in enumerate(blobs.items()):
+			resources[index % parts].append((datahash, data, 0))
 
 	outs = [bytearray(WIM_HEADER_SIZE) for _ in range(parts)]
-	lookup = b''
+	lookup = []
 	for part, out in enumerate(outs):
 		for datahash, data, flags in resources[part]:
 			stored, compressed = (data, False) if compress is None else compress_resource(data, compress, rng)
 			flags |= RESHDR_COMPRESSED if compressed is True else 0
-			lookup += pack_reshdr(len(stored), flags, len(out), len(data)) + struct.pack('<HI', part + 1, 1) + datahash
+			lookup.append(pack_reshdr(len(stored), flags, len(out), len(data)) + struct.pack('<HI', part + 1, 1) + datahash)
 			out += stored
+
+	if solid is not None:
+		solid_compression, solid_chunk_size, solid_count, run_count = solid
+		if parts != 1 or run_count > len(lookup) + 1:
+			raise Exception('Too many parts or runs')
+		items = list(blobs.items())
+		runs = []
+		for run_items in [items[i::run_count] for i in range(run_count)]:
+			# the entries of the resources and of the data are mixed, the order of the resources is kept
+			resource_entries = []
+			data_entries = []
+			run_offset = 0
+			for resource_items in [run_items[i::solid_count] for i in range(solid_count)]:
+				for datahash, data in resource_items:
+					data_entries.append(pack_reshdr(len(data), RESHDR_SOLID, run_offset, 0) + struct.pack('<HI', 1, 1) + datahash)
+					run_offset += len(data)
+				stored = build_solid_resource(b''.join(data for _, data in resource_items), solid_compression, solid_chunk_size, rng)
+				resource_entries.append(pack_reshdr(len(stored), RESHDR_SOLID, len(outs[0]), SOLID_RESOURCE_MAGIC) + struct.pack('<HI', 1, 1) + b'\x00' * 20)
+				outs[0] += stored
+			rng.shuffle(data_entries)
+			for entry in resource_entries:
+				data_entries.insert(rng.randint(0, len(data_entries)), None)
+			runs.append([entry if entry is not None else resource_entries.pop(0) for entry in data_entries])
+		# the runs are separated by the entries of the metadata
+		entries = runs.pop(0)
+		for entry in lookup:
+			entries.append(entry)
+			if len(runs) > 0:
+				entries += runs.pop(0)
+		lookup = entries
+	lookup = b''.join(lookup)
 	res = []
 	for part, out in enumerate(outs):
 		# every part has the whole lookup table
 		flags = 0 if parts == 1 else 0x8
 		if compression is not None:
-			flags |= HDR_COMPRESSION | (HDR_COMPRESS_XPRESS if compression == 'xpress' else HDR_COMPRESS_LZX)
-		header = b'MSWIM\x00\x00\x00' + struct.pack('<IIII', WIM_HEADER_SIZE, 0x10d00, flags, CHUNK_SIZE if compression is not None else 0)
+			flags |= HDR_COMPRESSION | HDR_COMPRESS_FLAGS[compression]
+		version = WIM_VERSION_SOLID if solid is not None else WIM_VERSION_DEFAULT
+		header = b'MSWIM\x00\x00\x00' + struct.pack('<IIII', WIM_HEADER_SIZE, version, flags, CHUNK_SIZE if compression is not None else 0)
 		header += guid + struct.pack('<HHI', part + 1, parts, len(images))
 		header += pack_reshdr(len(lookup), RESHDR_METADATA, len(out), len(lookup))
 		header += pack_reshdr(len(xml), RESHDR_METADATA, len(out) + len(lookup), len(xml))

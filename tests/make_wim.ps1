@@ -5,13 +5,15 @@ Creates the WIM test files of adiskreader with DISM. Needs Windows 10 / Server 2
 
     powershell -ExecutionPolicy Bypass -File make_wim.ps1 [-OutDir C:\adiskreader_wim_fixtures]
 
-Two directory trees are created (generated data only, no files of the system are copied) and captured to:
+Three directory trees are created (generated data only, no files of the system are copied) and captured to:
 
     wim_none.wim     /Compress:none, images: first, second
     wim_fast.wim     /Compress:fast (XPRESS), images: first, second
     wim_max.wim      /Compress:max (LZX), images: first, second
     wim_split.swm    wim_max.wim split to parts (wim_split2.swm ...)
     wim_recovery.esd first image of wim_max.wim exported with /Compress:recovery (LZMS, solid), skipped if DISM refuses it
+    wim_recovery2.esd images: third, first. The third tree is larger than a chunk of the solid resources (64 MB) and has
+                     tables of numbers and x86-64 like code in it, the first image is exported after it to the same file.
 
 Everything is collected in <OutDir>\adiskreader_wim_fixtures.zip, manifest.json in it describes the files
 and the contents of the trees (size, sha256, attributes, last write time, named data streams).
@@ -85,6 +87,63 @@ public static class ADRWimTools
                     default: target = rng.Next(-70000, 70000); break;
                 }
                 data[pos++] = 0xE8;
+                BitConverter.GetBytes(target).CopyTo(data, pos);
+                pos += 4;
+            }
+            else
+            {
+                data[pos++] = alphabet[rng.Next(alphabet.Length)];
+            }
+        }
+        return data;
+    }
+
+    // tables of numbers growing by the same amount, for the delta matches of LZMS
+    public static byte[] DeltaData(int size, int seed)
+    {
+        Random rng = new Random(seed);
+        int[] widths = { 1, 2, 3, 4, 6, 8, 16 };
+        byte[] data = new byte[size];
+        int pos = 0;
+        while (pos < size)
+        {
+            int width = widths[rng.Next(widths.Length)];
+            ulong value = ((ulong)(uint)rng.Next() << 32) | (uint)rng.Next();
+            ulong step = (ulong)rng.Next(1, 2000);
+            int count = rng.Next(5, 300);
+            for (int i = 0; i < count && pos < size; i++, value += step)
+                for (int j = 0; j < width && pos < size; j++)
+                    data[pos++] = j < 8 ? (byte)(value >> (8 * j)) : (byte)0;
+            if (rng.Next(3) == 0)
+                for (int i = rng.Next(1, 20); i > 0 && pos < size; i--)
+                    data[pos++] = (byte)rng.Next(256);
+        }
+        return data;
+    }
+
+    // instructions with relative addresses of a few targets: mov/lea rip relative, call, jmp, lock add, call indirect
+    public static byte[] Code64Data(int size, int seed)
+    {
+        Random rng = new Random(seed);
+        byte[][] opcodes = {
+            new byte[] { 0x48, 0x8B, 0x05 }, new byte[] { 0x48, 0x8B, 0x0D }, new byte[] { 0x48, 0x8D, 0x05 }, new byte[] { 0x48, 0x8D, 0x3D },
+            new byte[] { 0x4C, 0x8D, 0x05 }, new byte[] { 0x4C, 0x8D, 0x2D }, new byte[] { 0xE8 }, new byte[] { 0xE9 },
+            new byte[] { 0xF0, 0x83, 0x05 }, new byte[] { 0xFF, 0x15 }
+        };
+        byte[] alphabet = { 0x8B, 0x45, 0x89, 0x55, 0x48, 0x83, 0xEC, 0xC3, 0x00, 0xFF, 0x0F, 0x85, 0x74, 0x75, 0x90, 0xCC, 0x4C, 0xF0 };
+        int[] targets = new int[64];
+        for (int i = 0; i < targets.Length; i++)
+            targets[i] = rng.Next(0, size + 100000);
+        byte[] data = new byte[size];
+        int pos = 0;
+        while (pos < size)
+        {
+            if (rng.Next(5) == 0 && pos + 8 <= size)
+            {
+                byte[] opcode = opcodes[rng.Next(opcodes.Length)];
+                int target = rng.Next(8) == 0 ? rng.Next() : targets[rng.Next(targets.Length)] - pos;
+                opcode.CopyTo(data, pos);
+                pos += opcode.Length;
                 BitConverter.GetBytes(target).CopyTo(data, pos);
                 pos += 4;
             }
@@ -171,6 +230,19 @@ function Build-Second([string]$Root) {
     Write-Bytes $Root 'second\text2.txt' ([ADRWimTools]::TextData(400000, 21))
 }
 
+function Build-Third([string]$Root) {
+    Write-Bytes $Root 'hello.txt' ([System.Text.Encoding]::ASCII.GetBytes("hello from the third image`r`n"))
+    Write-Bytes $Root 'delta.bin' ([ADRWimTools]::DeltaData(3000000, 30))
+    Write-Bytes $Root 'code64.bin' ([ADRWimTools]::Code64Data(3000000, 31))
+    Write-Bytes $Root 'small\delta_small.bin' ([ADRWimTools]::DeltaData(20000, 32))
+    Write-Bytes $Root 'small\code64_small.bin' ([ADRWimTools]::Code64Data(20000, 33))
+    Write-Bytes $Root 'small\mixed.bin' ([ADRWimTools]::Code64Data(200000, 34) + [ADRWimTools]::DeltaData(200000, 35) + [ADRWimTools]::CodeData(200000, 36))
+    # more than a chunk of the solid resources together
+    for ($i = 0; $i -lt 5; $i++) {
+        Write-Bytes $Root ('big\text_{0}.txt' -f $i) ([ADRWimTools]::TextData(14000000, 40 + $i))
+    }
+}
+
 function Get-Tree([string]$Root) {
     # what a reader must find in the image captured from the directory
     $dirs = @()
@@ -241,6 +313,12 @@ for ($i = 0; $i -lt $TREES.Count; $i++) {
     $allimages += [ordered]@{ index = $i + 1; name = $TREES[$i].name; description = $TREES[$i].description; tree = $TREES[$i].name }
 }
 
+# only in wim_recovery2.esd
+$THIRD = @{ name = 'third'; description = 'third image of adiskreader'; root = (Join-Path $OutDir 'third') }
+New-Item -ItemType Directory -Path $THIRD.root | Out-Null
+Build-Third $THIRD.root
+$treeinfo[$THIRD.name] = Get-Tree $THIRD.root
+
 $wims = @()
 foreach ($compression in @('none', 'fast', 'max')) {
     $file = 'wim_{0}.wim' -f $compression
@@ -271,6 +349,25 @@ try {
 catch {
     Write-Warning ("No ESD file was created: {0}" -f $_)
     Remove-Item -Path (Join-Path $PackDir 'wim_recovery.esd') -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host 'Exporting wim_recovery2.esd'
+try {
+    $thirdwim = Join-Path $OutDir 'third.wim'
+    $esd = Join-Path $PackDir 'wim_recovery2.esd'
+    Invoke-Dism @('/Capture-Image', ('/ImageFile:{0}' -f $thirdwim), ('/CaptureDir:{0}' -f $THIRD.root),
+        ('/Name:{0}' -f $THIRD.name), ('/Description:{0}' -f $THIRD.description), '/Compress:fast')
+    Invoke-Dism @('/Export-Image', ('/SourceImageFile:{0}' -f $thirdwim), '/SourceIndex:1',
+        ('/DestinationImageFile:{0}' -f $esd), '/Compress:recovery')
+    Invoke-Dism @('/Export-Image', ('/SourceImageFile:{0}' -f (Join-Path $PackDir 'wim_max.wim')), '/SourceIndex:1',
+        ('/DestinationImageFile:{0}' -f $esd), '/Compress:recovery')
+    $wims += [ordered]@{ name = 'recovery2'; file = 'wim_recovery2.esd'; parts = @('wim_recovery2.esd'); images = @(
+        [ordered]@{ index = 1; name = $THIRD.name; description = $THIRD.description; tree = $THIRD.name },
+        [ordered]@{ index = 2; name = $TREES[0].name; description = $TREES[0].description; tree = $TREES[0].name }) }
+}
+catch {
+    Write-Warning ("No second ESD file was created: {0}" -f $_)
+    Remove-Item -Path (Join-Path $PackDir 'wim_recovery2.esd') -Force -ErrorAction SilentlyContinue
 }
 
 foreach ($wim in $wims) {

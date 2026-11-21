@@ -9,6 +9,9 @@ WIM_HEADER_SIZE = 208
 WIM_VERSION_DEFAULT = 0x10d00
 WIM_VERSION_SOLID = 0xe00
 ZERO_HASH = b'\x00' * 20
+# original size in the lookup entry of the solid resources. The entries of the data stored in them have the offset
+# in the uncompressed data of the solid resources before them and the size of the data instead of the size in the file.
+SOLID_RESOURCE_MAGIC = 0x100000000
 
 class WIMHeaderFlag(enum.IntFlag):
     RESERVED = 0x00000001
@@ -160,6 +163,14 @@ class WIMLookupEntry:
         self.part_number = None
         self.refcount = None
         self.hash = None
+        self.solid_resources = None # WIMResource list, set by the WIM for the data stored in solid resources
+
+    @property
+    def data_size(self):
+        """Size of the uncompressed data"""
+        if WIMResourceFlag.SOLID in self.resource.flags:
+            return self.resource.size
+        return self.resource.original_size
 
     @staticmethod
     def from_bytes(data:bytes):

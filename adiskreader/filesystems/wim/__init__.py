@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from adiskreader import logger
 from adiskreader.filesystems import FileSystem
 from adiskreader.filesystems.wim.structures import *
-from adiskreader.filesystems.wim.resource import WIMResource
+from adiskreader.filesystems.wim.resource import WIMResource, WIMSolidBlob
 from adiskreader.filesystems.wim.file import WIMFile
 
 # WIM (Windows Imaging) files: archives holding one or more directory trees (images), the contents of the files
@@ -79,7 +79,7 @@ class WIMDentry:
         entry = self.image.wim.lookup.get(streamhash)
         if entry is None:
             return 0
-        return entry[0].resource.original_size
+        return entry[0].data_size
 
     async def list_children(self):
         if self.__children is None:
@@ -376,10 +376,35 @@ class WIM:
         if header.lookup_table.offset == 0:
             return
         data = await self.open_resource(ds, header, header.lookup_table).read_all()
+        entries = []
         for i in range(0, len(data) - WIMLookupEntry.SIZE + 1, WIMLookupEntry.SIZE):
             entry = WIMLookupEntry.from_bytes(data[i:i+WIMLookupEntry.SIZE])
-            if WIMResourceFlag.FREE in entry.resource.flags:
+            if WIMResourceFlag.FREE not in entry.resource.flags:
+                entries.append(entry)
+
+        # Solid resources (ESD): the entries of the resources and of the data stored in them follow each other in any order,
+        # the offsets of the data are counted from the beginning of the first resource of such a run of entries.
+        solid_resources = None
+        for index, entry in enumerate(entries):
+            if WIMResourceFlag.SOLID in entry.resource.flags:
+                if solid_resources is None:
+                    solid_resources = []
+                    for other in entries[index:]:
+                        if WIMResourceFlag.SOLID not in other.resource.flags:
+                            break
+                        if other.resource.original_size == SOLID_RESOURCE_MAGIC and other.part_number == header.part_number:
+                            # opened once, the chunks decompressed are shared by the files
+                            solid_resources.append(self.open_resource(ds, header, other.resource))
+                if entry.resource.original_size == SOLID_RESOURCE_MAGIC or entry.part_number != header.part_number:
+                    continue
+                if len(solid_resources) == 0:
+                    logger.warning('Data without solid resource in the lookup table of the WIM file: %s' % entry.hash.hex())
+                    continue
+                entry.solid_resources = solid_resources
+                if entry.hash not in self.lookup:
+                    self.lookup[entry.hash] = (entry, ds, header)
                 continue
+            solid_resources = None
             if WIMResourceFlag.METADATA in entry.resource.flags:
                 # the metadata of the images are in the first part, in the order of the images
                 if with_metadata is True and entry.part_number == header.part_number:
@@ -443,6 +468,8 @@ class WIM:
             if self.header.total_parts > 1:
                 raise FileNotFoundError('The data of the file is not in the opened parts of the WIM file')
             raise FileNotFoundError('The data of the file is not in the WIM file')
+        if entry[0].solid_resources is not None:
+            return WIMSolidBlob(entry[0].solid_resources, entry[0].resource.offset, entry[0].resource.size)
         return self.open_resource(entry[1], entry[2], entry[0].resource)
 
     async def mount(self, index:int = 1):
