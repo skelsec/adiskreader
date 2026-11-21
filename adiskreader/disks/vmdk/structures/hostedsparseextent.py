@@ -1,13 +1,17 @@
 import io
 import enum
 import math
-import zlib
-from cachetools import LRUCache
+from adiskreader.disks.vmdk.structures.extent import SparseExtent, SECTOR_SIZE, GRAIN_UNALLOCATED, GRAIN_ZERO, GRAIN_DATA
+
+HOSTED_SPARSE_MAGIC = b'KDMV'
+# the grain directory offset is stored in the footer
+GD_AT_END = 0xffffffffffffffff
 
 class HostedSparseExtentFlags(enum.IntFlag):
     NONE = 0x00000000
     ValidLineDetectionTest = 0x00000001
     RedundantGrainTable = 0x00000002
+    ZeroedGrainGTE = 0x00000004
     CompressedGrains = 0x00010000
     MarkersInUse = 0x00020000
 
@@ -100,89 +104,53 @@ class HostedSparseExtendHeader:
         t.append(f"_gtCoverage: {self._gtCoverage}")
         return '\n'.join(t)
 
-class HostedSparseExtent:
+class HostedSparseExtent(SparseExtent):
+    """SPARSE extent, used by the hosted products (Workstation, Fusion) and by the stream optimized disks of OVA files"""
     def __init__(self, stream, descriptor):
-        self.__stream = stream
-        self.__descriptor = descriptor
+        super().__init__(stream, descriptor)
         self.header:HostedSparseExtendHeader = None
-        self.GD = []
-        self.RGD = []
-        self.grainTableCache = LRUCache(maxsize=1000)
-        self.__current_grain_table_index = None
-        self.__current_grain_table = None
 
     async def setup(self):
-        await self.__stream.seek(self.__descriptor.offset * 512)
-        headerdata = await self.__stream.read(0x200)
-        self.header = HostedSparseExtendHeader.from_bytes(headerdata)
+        await self.stream.seek(0, 0)
+        self.header = HostedSparseExtendHeader.from_bytes(await self.stream.read(SECTOR_SIZE))
+        if self.header.gdOffset == GD_AT_END:
+            # stream optimized: the header with the grain directory offset is in the footer,
+            # which is followed by the end-of-stream marker
+            await self.stream.seek(-2 * SECTOR_SIZE, 2)
+            self.header = HostedSparseExtendHeader.from_bytes(await self.stream.read(SECTOR_SIZE))
+        if self.header.grainSize == 0 or self.header.numGTEsPerGT == 0:
+            raise Exception("Invalid sparse extent header")
 
-        test = self.header.descriptorOffset + self.header.descriptorSize + self.header.rgdOffset
-        print('test: %s' % test)
+        self.capacity = self.header.capacity
+        self.grain_sectors = self.header.grainSize
+        self.gt_entries = self.header.numGTEsPerGT
+        self.compressed = HostedSparseExtentFlags.CompressedGrains in self.header.flags
+        self.init_caches()
+        numGTs = math.ceil(self.header.capacity / (self.header.numGTEsPerGT * self.header.grainSize))
+        await self.read_directory(self.header.gdOffset * SECTOR_SIZE, numGTs)
 
-        if self.header.gdOffset == 0xffffffffffffffff:
-            input(self.header)
-            #await self.load_global_directory(self.header.rgdOffset, self.GD)
+    async def read_descriptor(self):
+        """Returns the raw descriptor file embedded in the extent, None if there is none"""
+        if self.header.descriptorOffset == 0 or self.header.descriptorSize == 0:
+            return None
+        await self.stream.seek(self.header.descriptorOffset * SECTOR_SIZE, 0)
+        data = await self.stream.read(self.header.descriptorSize * SECTOR_SIZE)
+        if data.strip(b'\x00') == b'':
+            # extents of split disks have the space for it, but it is empty
+            return None
+        return data
 
-            await self.load_global_directory(128, self.GD)
+    def get_table_offset(self, gde:int):
+        if gde == 0:
+            return None
+        return gde * SECTOR_SIZE
 
-        else:
-            await self.load_global_directory(self.header.gdOffset, self.GD)
-            if HostedSparseExtentFlags.RedundantGrainTable in self.header.flags:
-                await self.load_global_directory(self.header.rgdOffset, self.RGD)
-
-
-    async def load_global_directory(self, start_sector, dst):
-        numGTs = math.ceil((self.header.capacity * 512) / self.header._gtCoverage)
-        print('numGTs: %s' % numGTs)
-        print('start_sector: %s' % start_sector)
-        await self.__stream.seek(start_sector * 512)
-        gtdata = await self.__stream.read(4*numGTs)
-        input('GD: %s' % gtdata[:100])
-        gtbuff = io.BytesIO(gtdata)
-        for _ in range(numGTs):
-            dst.append(int.from_bytes(gtbuff.read(4), byteorder='little'))
-
-    async def load_grain_table(self, index):
-        if self.__current_grain_table_index == index:
-            return
-        if index >= len(self.GD):
-            raise Exception("Invalid grain table index")
-        if index in self.grainTableCache:
-            self.__current_grain_table = self.grainTableCache[index]
-            self.__current_grain_table_index = index
-            return
-        
-        print(index)
-        print(self.GD[:10])
-        print(self.GD[index])
-        await self.__stream.seek(self.GD[index] * 512)
-        gtdata = await self.__stream.read(self.header.numGTEsPerGT * 4)
-        print(gtdata[:100])
-        graintable = []
-        for i in range(0,self.header.numGTEsPerGT, 4):
-            graintable.append(int.from_bytes(gtdata[i:i+4], byteorder='little'))
-        self.grainTableCache[index] = graintable
-        self.__current_grain_table = graintable
-        self.__current_grain_table_index = index
-        return
-    
-    async def read_grain(self, index):
-        if index >= self.header.capacity:
-            raise Exception("Invalid grain index")
-        
-        print(index)
-        print('index // self.header.numGTEsPerGT: %s' % (index // self.header.numGTEsPerGT))
-        await self.load_grain_table(index // self.header.numGTEsPerGT)
-        print('Current GT: %s' % self.__current_grain_table[:100])
-        offset = index % self.header.numGTEsPerGT
-        print('offset: %s' % offset)
-        grain_offset = self.__current_grain_table[offset]
-        input('Grain offset: %s' % grain_offset)
-        await self.__stream.seek(grain_offset)
-        rawdata = await self.__stream.read(self.header.grainSize * 512)
-        if HostedSparseExtentFlags.CompressedGrains in self.header.flags:
-            rawdata = zlib.decompress(rawdata, wbits=-15)
-        return rawdata
+    def get_grain(self, gte:int):
+        if gte == 0:
+            return GRAIN_UNALLOCATED, None
+        if gte == 1 and HostedSparseExtentFlags.ZeroedGrainGTE in self.header.flags:
+            return GRAIN_ZERO, None
+        return GRAIN_DATA, gte * SECTOR_SIZE
     
     @staticmethod
     async def from_descriptor(stream, descriptor):

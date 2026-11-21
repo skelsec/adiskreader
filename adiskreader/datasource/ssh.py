@@ -11,6 +11,7 @@ class SSHFileSource(DataSource):
     def __init__(self, config):
         super().__init__(config)
         self.__factory = None
+        self.__client = None
         self.__sftp = None
         self.__path = None
         self.__stream = None
@@ -44,6 +45,7 @@ class SSHFileSource(DataSource):
             if 'verify' in query:
                 settings.skip_hostkey_verification = query['verify'][0].lower() in ['0', 'false', 'no']
             client = self.__factory.get_client(settings)
+            self.__client = client
             _, err = await client.connect()
             if err is not None:
                 raise err
@@ -65,6 +67,10 @@ class SSHFileSource(DataSource):
     
     async def read(self, size:int):
         self.__total_read += size
+        if self.__offset >= self.__size:
+            return b''
+        # reads at the end of the file are truncated
+        size = min(size, self.__size - self.__offset)
         self.__stream.seek(self.__offset, 0)
         try:
             data = await self.__stream.read(size)
@@ -93,6 +99,10 @@ class SSHFileSource(DataSource):
     
     async def close(self):
         await self.__stream.close()
+        if self.__client is not None:
+            # only the connection created by this object is closed
+            await self.__client.connection.close()
+            self.__client = None
     
     async def tell(self):
         return self.__offset

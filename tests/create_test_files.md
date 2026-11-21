@@ -70,6 +70,25 @@ qemu-img convert -f raw -O vhdx -o subformat=dynamic ntfs_test.img ntfs_test_dyn
 qemu-img convert -f raw -O vhdx -o subformat=fixed ntfs_test.img ntfs_test_fixed.vhdx
 ```
 
+VMDK:
+The vmdk images are converted from the raw ntfs image, the snapshots are written with qemu-io (the writes are listed in `config.py`):
+```
+qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse ntfs_test.img ntfs_test_monolithicSparse.vmdk
+qemu-img convert -f raw -O vmdk -o subformat=streamOptimized ntfs_test.img ntfs_test_streamOptimized.vmdk
+qemu-img create -f vmdk -b ntfs_test_monolithicSparse.vmdk -F vmdk ntfs_test_snapshot.vmdk
+qemu-io -f vmdk -c "write -P 0xA5 0x200000 0x30000" -c "write -P 0x5A 0x2fffe00 0x1200" -c "write -P 0x77 0x10001 0x1ff" ntfs_test_snapshot.vmdk
+qemu-img create -f vmdk -b ntfs_test_snapshot.vmdk -F vmdk ntfs_test_snapshot2.vmdk
+qemu-io -f vmdk -c "write -P 0x11 0x210000 0x10000" -c "write -z 0x400000 0x100000" ntfs_test_snapshot2.vmdk
+```
+The `ntfs_test_vmware*` images are made by VMware Workstation, `t.vmx` is a minimal VM with `ntfs_test_vmware.vmdk` as its only disk:
+```
+vmware-vdiskmanager -r built_flat.vmdk -t 0 ntfs_test_vmware.vmdk
+vmrun -T ws snapshot t.vmx snap1    # creates ntfs_test_vmware-000001.vmdk, then the same qemu-io writes as above
+ovftool t.vmx t.ova                 # before the snapshot, ntfs_test_vmware_ova.vmdk is the disk in the ova
+```
+The disks qemu-img can not create (multiple extents, ESXi snapshots, stream optimized with footer) are built by `vmdk_builder.py` when the tests run.
+If qemu-img is installed, `test_vmdk.py` also checks that qemu reads the same data from them.
+
 MANIFESTS:
 The tests compare the images against the expected contents stored in `manifests/`.
 After changing an image, regenerate them (needs 7z, no root):

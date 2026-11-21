@@ -13,7 +13,27 @@ NTFS_TEST_FILE_VHDX_DYNAMIC_GZ = 'testfiles/ntfs_test_dynamic.vhdx.gz'
 NTFS_TEST_FILE_VHDX_FIXED_GZ   = 'testfiles/ntfs_test_fixed.vhdx.gz'
 # made by Windows, has a log which needs to be replayed before it can be read
 NTFS_TEST_FILE_VHDX_GZ  = 'testfiles/small_ntfs_test.vhdx.gz'
+# converted from the raw ntfs image with qemu-img, same contents
+NTFS_TEST_FILE_VMDK_SPARSE_GZ = 'testfiles/ntfs_test_monolithicSparse.vmdk.gz'
+NTFS_TEST_FILE_VMDK_STREAM_GZ = 'testfiles/ntfs_test_streamOptimized.vmdk.gz'
+# snapshot of the sparse vmdk and the snapshot of that snapshot, see VMDK_SNAPSHOT_WRITES
+NTFS_TEST_FILE_VMDK_SNAPSHOT_GZ  = 'testfiles/ntfs_test_snapshot.vmdk.gz'
+NTFS_TEST_FILE_VMDK_SNAPSHOT2_GZ = 'testfiles/ntfs_test_snapshot2.vmdk.gz'
+# made by VMware Workstation: the disk, its snapshot (with VMDK_SNAPSHOT_WRITES) and the disk of the OVA export
+NTFS_TEST_FILE_VMDK_VMWARE_GZ          = 'testfiles/ntfs_test_vmware.vmdk.gz'
+NTFS_TEST_FILE_VMDK_VMWARE_SNAPSHOT_GZ = 'testfiles/ntfs_test_vmware-000001.vmdk.gz'
+NTFS_TEST_FILE_VMDK_VMWARE_OVA_GZ      = 'testfiles/ntfs_test_vmware_ova.vmdk.gz'
 
+# (offset, length, byte) written to the snapshots with qemu-io
+VMDK_SNAPSHOT_WRITES = [
+	(0x200000, 0x30000, 0xA5),
+	(0x2fffe00, 0x1200, 0x5A),
+	(0x10001, 0x1ff, 0x77),
+]
+VMDK_SNAPSHOT2_WRITES = [
+	(0x210000, 0x10000, 0x11),
+	(0x400000, 0x100000, 0x00),
+]
 
 CURRENT_FILE_PATH = pathlib.Path(__file__).parent.absolute()
 TESTFILES_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('testfiles')
