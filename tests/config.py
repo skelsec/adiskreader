@@ -36,9 +36,19 @@ VMDK_SNAPSHOT2_WRITES = [
 	(0x400000, 0x100000, 0x00),
 ]
 
+# ntfs image holding diff_vhd_base.vhd and diff_vhd_child1.vhd of the differencing chains, for reading disks stored in a filesystem
+NESTED_NTFS_TEST_FILE_GZ = 'testfiles/nested_ntfs.img.gz'
+
+# wim file without compression made by 7z, the xpress and lzx compressed ones are built from it (wim_builder.py)
+WIM_TEST_FILE_GZ = 'testfiles/wim_test.wim.gz'
+
 # differencing vhd / vhdx chains made by Windows with make_diff_vhd.ps1, with the contents Windows reads from each disk
 DIFF_FIXTURES_ZIP = 'testfiles/adiskreader_diff_fixtures.zip'
 DIFF_FOLDER_NAME = 'diff'
+
+# wim files made by Windows (DISM) with make_wim.ps1, with the contents of their images
+WIM_FIXTURES_ZIP = 'testfiles/adiskreader_wim_fixtures.zip'
+WIM_FOLDER_NAME = 'wimwin'
 
 CURRENT_FILE_PATH = pathlib.Path(__file__).parent.absolute()
 TESTFILES_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('testfiles')
@@ -49,6 +59,7 @@ MANIFESTS = {
 	'vfat_16' : VFAT_16_TEST_FILE_GZ,
 	'vfat_32' : VFAT_32_TEST_FILE_GZ,
 	'ntfs'    : NTFS_TEST_FILE_GZ,
+	'wim'     : WIM_TEST_FILE_GZ,
 }
 
 def decompress_gzip(source_path:pathlib.Path, destination_file_name = None):
@@ -68,6 +79,41 @@ def get_image(image_gz, compressed = False):
 	if compressed is True:
 		return image_gz_path
 	return decompress_gzip(image_gz_path)
+
+def get_wim_image(compression = None):
+	"""Returns the path of the test wim file, compression is None, 'xpress' or 'lzx'"""
+	path = get_image(WIM_TEST_FILE_GZ)
+	if compression is None:
+		return path
+	from wim_builder import build_compressed_wim
+	dstfilepath = TESTFILES_FOLDER_PATH.joinpath('wim_test_%s.wim' % compression)
+	if dstfilepath.exists() is False:
+		tmpfilepath = dstfilepath.with_name(dstfilepath.name + '.tmp')
+		tmpfilepath.write_bytes(build_compressed_wim(path.read_bytes(), compression))
+		tmpfilepath.rename(dstfilepath)
+	return dstfilepath
+
+def has_wim_fixtures():
+	return CURRENT_FILE_PATH.joinpath(WIM_FIXTURES_ZIP).exists()
+
+def get_wim_fixtures():
+	"""Extracts the WIM files made by Windows to testfiles/wimwin, returns the folder and the manifest"""
+	folder = TESTFILES_FOLDER_PATH.joinpath(WIM_FOLDER_NAME)
+	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(WIM_FIXTURES_ZIP)) as zf:
+		with zf.open('manifest.json') as f:
+			manifest = json.loads(f.read().decode('utf-8-sig'))
+		for wim in manifest['wims']:
+			for part in wim['parts']:
+				dstfilepath = folder.joinpath(part)
+				if dstfilepath.exists():
+					continue
+				dstfilepath.parent.mkdir(parents=True, exist_ok=True)
+				tmpfilepath = dstfilepath.with_name(dstfilepath.name + '.tmp')
+				with zf.open(part) as f_in:
+					with open(tmpfilepath, 'wb') as f_out:
+						shutil.copyfileobj(f_in, f_out)
+				tmpfilepath.rename(dstfilepath)
+	return folder, manifest
 
 def get_diff_fixtures():
 	"""

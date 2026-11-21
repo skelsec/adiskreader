@@ -24,3 +24,8 @@ class FileSystem:
     
     async def walk(self, path:str = "\\"):
         raise NotImplementedError()
+
+    async def open_datasource(self, path:str):
+        """Opens a file of the filesystem as a datasource, for reading the disk images stored in it"""
+        from adiskreader.datasource.fsfile import FSFileSource
+        return await FSFileSource.from_filesystem(self, path)

@@ -18,6 +18,7 @@ from adiskreader._version import __banner__
 
 from adiskreader.datasource import DataSource
 from adiskreader.disks import Disk
+from adiskreader.filesystems.wim import WIM
 
 
 class DiskBrowser(aiocmd.PromptToolkitCmd):
@@ -120,7 +121,11 @@ class DiskBrowser(aiocmd.PromptToolkitCmd):
 	async def do_open(self, filepath:str):
 		try:
 			self.__datasource = await DataSource.from_url(filepath)
-			self.__disk = await Disk.from_datasource(self.__datasource)
+			if await WIM.is_wim(self.__datasource) is True:
+				# the images of the WIM file are listed and mounted like the partitions of a disk
+				self.__disk = await WIM.from_datasource(self.__datasource)
+			else:
+				self.__disk = await Disk.from_datasource(self.__datasource)
 			await self.do_partinfo(False)
 			if len(self.__partitions) == 0:
 				print('No partitions found!')

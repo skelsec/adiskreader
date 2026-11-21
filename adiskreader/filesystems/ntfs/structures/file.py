@@ -96,13 +96,6 @@ class NTFSFile:
         #input()
 
         if start_idx is None or stop_idx is None:
-            print('start_idx: %s' % start_idx)
-            print('stop_idx: %s' % stop_idx)
-            print('size: %s' % size)
-            print('total size: %s' % self.__dataattr.header.real_size)
-            print('data runs: %s' % self.__dataattr.header.data_runs)
-            print('internal real size: %s' % self.__real_size)
-            input('Error: start_idx or stop_idx is None')
             raise FileNotFoundError
 
         if start_idx == stop_idx:

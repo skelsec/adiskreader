@@ -94,6 +94,27 @@ The chains (base, two children and one more child in a subdirectory, for dynamic
 Run `make_diff_vhd.ps1` in an elevated PowerShell on a Windows host and copy the zip it creates to `testfiles/adiskreader_diff_fixtures.zip`.
 The zip holds the disks, what Windows reads from each of them and a manifest; the tests extract it to `testfiles/diff` (about 820 MB).
 
+Disk images inside a filesystem:
+`nested_ntfs.img` holds two disks of the differencing chains, no root needed:
+```
+truncate -s 64M nested_ntfs.img
+mkntfs -F -Q -c 4096 -L nested nested_ntfs.img
+ntfscp nested_ntfs.img testfiles/diff/diff_vhd_base.vhd diff_vhd_base.vhd
+ntfscp nested_ntfs.img testfiles/diff/diff_vhd_child1.vhd diff_vhd_child1.vhd
+```
+
+WIM:
+`wim_test.wim` is made by 7z, which can only create WIM files without compression:
+```
+python wim_builder.py source /tmp/wimsrc
+(cd /tmp/wimsrc && 7z a -twim ../wim_test.wim .)
+gzip -9 wim_test.wim
+```
+The XPRESS and LZX compressed versions are built from it by `wim_builder.py` when the tests run (7z reads them, `test_wim_7z` checks it),
+as well as the files with more images, named data streams and more parts.
+WIM files made by Windows (DISM) are created by `make_wim.ps1`: run it in an elevated PowerShell on a Windows host and
+copy the zip it creates to `testfiles/adiskreader_wim_fixtures.zip`; `test_wim_windows.py` is skipped without it.
+
 MANIFESTS:
 The tests compare the images against the expected contents stored in `manifests/`.
 After changing an image, regenerate them (needs 7z, no root):

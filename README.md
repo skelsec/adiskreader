@@ -31,7 +31,16 @@ It comes with an example console client to demonstrate the core features.
 
 | Raw | VHD | VHDX | VMDK |   |
 |-----|-----|------|------|---|
-| ✔️   | ✔️   | ✔️    | ❌    |   |
+| ✔️   | ✔️   | ✔️    | ✔️    |   |
+
+Differencing VHD / VHDX disks and VMDK snapshots are read together with their parents.  
+Disk images stored inside another image can be opened with `FSFileSource`.
+
+## Archive
+
+| WIM (uncompressed, XPRESS, LZX) | Split WIM (SWM) | ESD (LZMS, solid) |
+|---------------------------------|-----------------|-------------------|
+| ✔️                               | ✔️               | ❌                 |
 
 ## Partition
 
@@ -62,6 +71,10 @@ Interactive sample client that tries to automatically "mount" the disk image spe
 
 ### Parsing a local VHDX file
 `adiskreader-console file://C:\Users\test\images\test.vhdx`
+
+### Browsing a WIM file
+`adiskreader-console file:///home/user/images/install.wim`  
+The images of the WIM file take the place of the partitions, `mount <index>` selects one.
 
 ### Parsing a gzipped raw disk image 
 `adiskreader-console file+gz:///home/user/images/test.gz.raw`
