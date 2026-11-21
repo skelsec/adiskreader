@@ -8,19 +8,22 @@ from typing import List
 from adiskreader.disks import Disk
 from adiskreader.datasource import DataSource
 from adiskreader.disks.vhdx.structures.headers import Headers, VHDX_KNOWN_REGIONS, BAT, MetaDataRegion
+from adiskreader.disks.vhdx.log import LogReplaySource, find_active_sequence
 from cachetools import LRUCache
 
 class VHDXDisk(Disk):
     def __init__(self):
         self.__stream = None
         self.headers = None
+        self.log_entries_replayed = 0
         self.active_region = None
         self.active_meta:MetaDataRegion = None
         self.active_bat:BAT = None
         self.lba_per_block = None
         self.use_buffer = True
+        self.block_cache_size = 1024*1024*1024 # max bytes of blocks kept in memory
         self.__lba_cache = LRUCache(maxsize=1000)
-        self.__block_cache = LRUCache(maxsize=1000)
+        self.__block_cache = LRUCache(maxsize=1)
         self.__block_stats = {}
 
         self.__stats = {
@@ -49,7 +52,22 @@ class VHDXDisk(Disk):
     async def read_headers(self):
         data = await self.__stream.read(1*1024*1024)
         self.headers = Headers.from_bytes(data)
+        await self.replay_log()
         await self.switch_active_region(1)
+
+    async def replay_log(self):
+        header = self.headers.get_current_header()
+        if header.LogGuid.int == 0:
+            # nothing to replay
+            return
+
+        await self.__stream.seek(header.LogOffset, 0)
+        log = await self.__stream.read(header.LogLength)
+        entries = find_active_sequence(log, header.LogGuid)
+        if len(entries) == 0:
+            return
+        self.log_entries_replayed = len(entries)
+        self.__stream = LogReplaySource(self.__stream, entries)
 
     def get_stats(self):
         return self.__stats
@@ -74,9 +92,10 @@ class VHDXDisk(Disk):
             elif region_type == '8B7CA206-4790-4B9A-B8FE-575F050F886E':
                 self.active_meta = region
 
-        self.__lba_cache = {}
-        if self.use_buffer is True:
-            self.__block_cache = {}
+        self.__lba_cache.clear()
+        # blocks can be up to 256MB each, so the cache is limited by total size
+        max_blocks = max(1, self.block_cache_size // self.active_meta.BlockSize)
+        self.__block_cache = LRUCache(maxsize=max_blocks)
 
     def __add_to_cache_return(self, lba:int, data:bytes):
         self.__lba_cache[lba] = data
@@ -106,7 +125,11 @@ class VHDXDisk(Disk):
     #    return data
     
     async def read_block(self, block_idx:int, start_offset:int=0, length:int=None):
-        if start_offset != 0:
+        # a read from the start of the block is still partial if it has a length
+        partial = start_offset != 0 or length is not None
+        if length is None:
+            length = self.active_meta.BlockSize - start_offset
+        if partial is True:
             self.__stats['read_block_partial'] += 1
             self.__block_stats[block_idx] = self.__block_stats.get(block_idx, 0) + 1
             if self.__block_stats[block_idx] > 50:
@@ -126,19 +149,14 @@ class VHDXDisk(Disk):
         entry = self.active_bat.entries[block_idx + bitmap_block_cnt]
         if entry[0] != 6:
             #print('Block %s is not allocated' % block_idx)
-            if length is None:
-                return b'\x00' * self.active_meta.BlockSize
-            else:
-                return b'\x00' * length
+            return b'\x00' * length
             
         block_offset = entry[1]
-        if start_offset != 0:
+        if partial is True:
             # partial read, not storing in cache
             if block_idx in self.__block_cache:
                 return self.__block_cache[block_idx][start_offset:start_offset+length]
             block_offset += start_offset
-            if length is None:
-                length = self.active_meta.BlockSize - start_offset
             await self.__stream.seek(block_offset, 0)
             data = await self.__stream.read(length)
             return data

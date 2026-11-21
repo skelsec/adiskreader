@@ -109,8 +109,8 @@ class NTFS(FileSystem):
         datastream = ''
         m = parts[-1].find(':')
         if m != -1:
-            parts[-1] = parts[-1][:m]
             datastream = parts[-1][m+1:]
+            parts[-1] = parts[-1][:m]
         
         inode = await self.mft.find_path('\\'.join(parts))
         if inode is None:

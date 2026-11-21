@@ -1,6 +1,7 @@
 import io
 import uuid
 from typing import List, Dict, Tuple
+from adiskreader.utils import crc32c
 
 # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-vhdx/340e64a4-ae2a-4dc1-b19b-3dd9d57a3359
 
@@ -28,6 +29,13 @@ class Headers:
         headers.RegionTable2 = RegionTable.from_buffer(data)
         headers.Reserved = buff.read()
         return headers
+
+    def get_current_header(self):
+        """Returns the valid header with the highest sequence number"""
+        valid = [header for header in (self.Header1, self.Header2) if header.valid is True]
+        if len(valid) == 0:
+            raise Exception('No valid VHDX header found')
+        return max(valid, key=lambda header: header.SequenceNumber)
 
     def __str__(self) -> str:
         t = '== Headers ==\n'
@@ -78,37 +86,37 @@ class Header:
         self.Version = None
         self.LogLength = None
         self.LogOffset = None
-        self.LogSequenceNumber = None
-        self.LogChecksum = None
         self.Reserved = None
-    
+        self.valid = None # signature and checksum are correct
+
     @staticmethod
     def from_bytes(data:bytes):
         return Header.from_buffer(io.BytesIO(data))
-    
+
     @staticmethod
     def from_buffer(buff):
-        data = io.BytesIO(buff.read(64*1024)) # 64KB
+        raw = buff.read(64*1024) # 64KB
+        data = io.BytesIO(raw)
         header = Header()
-        header.Signature = data.read(8)
-        header.Checksum = data.read(4)
-        header.SequenceNumber = int.from_bytes(data.read(4), byteorder='little', signed=False)
+        header.Signature = data.read(4)
+        header.Checksum = int.from_bytes(data.read(4), byteorder='little', signed=False)
+        header.SequenceNumber = int.from_bytes(data.read(8), byteorder='little', signed=False)
         header.FileWriteGuid = uuid.UUID(bytes_le=data.read(16))
         header.DataWriteGuid = uuid.UUID(bytes_le=data.read(16))
         header.LogGuid = uuid.UUID(bytes_le=data.read(16))
-        header.LogVersion = int.from_bytes(data.read(4), byteorder='little', signed=False)
-        header.Version = int.from_bytes(data.read(4), byteorder='little', signed=False)
+        header.LogVersion = int.from_bytes(data.read(2), byteorder='little', signed=False)
+        header.Version = int.from_bytes(data.read(2), byteorder='little', signed=False)
         header.LogLength = int.from_bytes(data.read(4), byteorder='little', signed=False)
-        header.LogOffset = int.from_bytes(data.read(4), byteorder='little', signed=False)
-        header.LogSequenceNumber = int.from_bytes(data.read(8), byteorder='little', signed=False)
-        header.LogChecksum = data.read(4)
-        header.Reserved = data.read(416)
+        header.LogOffset = int.from_bytes(data.read(8), byteorder='little', signed=False)
+        header.Reserved = data.read(4016)
+        # the checksum covers the first 4KB with the checksum field zeroed
+        header.valid = header.Signature == b'head' and crc32c(raw[:4] + b'\x00'*4 + raw[8:4096]) == header.Checksum
         return header
 
     def __str__(self) -> str:
         t = '== Header ==\n'
         t += f'Signature: {self.Signature.hex()}\n'
-        t += f'Checksum: {self.Checksum.hex()}\n'
+        t += f'Checksum: {self.Checksum}\n'
         t += f'SequenceNumber: {self.SequenceNumber}\n'
         t += f'FileWriteGuid: {self.FileWriteGuid}\n'
         t += f'DataWriteGuid: {self.DataWriteGuid}\n'
@@ -117,9 +125,7 @@ class Header:
         t += f'Version: {self.Version}\n'
         t += f'LogLength: {self.LogLength}\n'
         t += f'LogOffset: {self.LogOffset}\n'
-        t += f'LogSequenceNumber: {self.LogSequenceNumber}\n'
-        t += f'LogChecksum: {self.LogChecksum.hex()}\n'
-        t += f'Reserved: {self.Reserved.hex()}'
+        t += f'Valid: {self.valid}'
         return t
     
 # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-vhdx/c562ffcd-6c63-421f-a28d-2ee812c94b08

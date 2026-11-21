@@ -62,3 +62,26 @@ sudo mount ${LOOPMOUNT}p1 ${mntdir}
 sudo umount ${mntdir}
 sudo losetup -d ${LOOPMOUNT}
 ```
+
+
+VHDX (converted from the raw NTFS image):
+```
+qemu-img convert -f raw -O vhdx -o subformat=dynamic ntfs_test.img ntfs_test_dynamic.vhdx
+qemu-img convert -f raw -O vhdx -o subformat=fixed ntfs_test.img ntfs_test_fixed.vhdx
+```
+
+MANIFESTS:
+The tests compare the images against the expected contents stored in `manifests/`.
+After changing an image, regenerate them (needs 7z, no root):
+```
+python make_manifest.py
+```
+
+SMB:
+`test_smb.py` is skipped unless `ADISKREADER_SMB_URL` points to a share holding the decompressed test images.
+To use a local samba container (needs docker, listens on 127.0.0.1:4445 only):
+```
+eval "$(smb/start.sh)"
+pytest test_smb.py
+docker stop adiskreader-smb
+```
