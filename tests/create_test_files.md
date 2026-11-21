@@ -121,6 +121,13 @@ The images are built by `iso_builder.py` when the tests run, nothing is stored. 
 Disc images made by Windows (IMAPI2) are created by `make_iso.ps1`: run it in PowerShell on a Windows host (no elevation needed) and
 copy the zip it creates to `testfiles/adiskreader_iso_fixtures.zip`; `test_iso_windows.py` is skipped without it.
 
+QCOW2 / VDI:
+The test disks are in `testfiles/adiskreader_qemu_fixtures.zip`, together with what qemu reads from each of them.
+To create them again (needs qemu-img, qemu-io and vbox-img of VirtualBox, no root):
+```
+python make_qemu_fixtures.py
+```
+
 MANIFESTS:
 The tests compare the images against the expected contents stored in `manifests/`.
 After changing an image, regenerate them (needs 7z, no root):

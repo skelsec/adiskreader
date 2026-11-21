@@ -29,11 +29,13 @@ It comes with an example console client to demonstrate the core features.
 
 ## Disk
 
-| Raw | VHD | VHDX | VMDK |   |
-|-----|-----|------|------|---|
-| ✔️   | ✔️   | ✔️    | ✔️    |   |
+| Raw | VHD | VHDX | VMDK | QCOW2 | VDI |
+|-----|-----|------|------|-------|-----|
+| ✔️   | ✔️   | ✔️    | ✔️    | ✔️     | ✔️   |
 
-Differencing VHD / VHDX disks and VMDK snapshots are read together with their parents.  
+Differencing VHD / VHDX disks, VMDK snapshots and QCOW2 disks with backing files are read together with their parents.  
+QCOW2: version 2 and 3, compressed clusters (zstd needs python 3.14 or the `zstandard` module), extended L2 entries, external data files. The snapshots stored in the disk are opened with `open_snapshot`. Encrypted disks are not supported.  
+VDI: the differencing disks do not store the path of their parent, open the files of the chain with `VDIDisk.from_chain`.  
 Disk images stored inside another image can be opened with `FSFileSource`.
 
 ## Archive

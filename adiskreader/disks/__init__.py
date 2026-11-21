@@ -39,6 +39,12 @@ class Disk:
             if 'VHD' in schemes:
                 from adiskreader.disks.vhd import VHDDisk
                 return await VHDDisk.from_datasource(ds)
+            if 'QCOW2' in schemes:
+                from adiskreader.disks.qcow2 import QCOW2Disk
+                return await QCOW2Disk.from_datasource(ds)
+            if 'VDI' in schemes:
+                from adiskreader.disks.vdi import VDIDisk
+                return await VDIDisk.from_datasource(ds)
         
         if 'path' in ds.config:
             disktype = get_disk_for_extension(ds.config['path'])
@@ -51,8 +57,34 @@ class Disk:
             if disktype is not None:
                 return await disktype.from_datasource(ds)
                 
+        # the extension did not help, the sparse formats have a signature at the start of the file
+        disktype = await detect_disk_type(ds)
+        if disktype is not None:
+            return await disktype.from_datasource(ds)
+
         # give up and try RAW
         return await RAWDisk.from_datasource(ds)
+
+async def detect_disk_type(ds):
+    """Returns the disk type of the signature at the start of the file, None if there is no known one"""
+    await ds.seek(0, 0)
+    data = await ds.read(72)
+    if data[:4] == b'QFI\xfb':
+        from adiskreader.disks.qcow2 import QCOW2Disk
+        return QCOW2Disk
+    if data[:8] == b'vhdxfile':
+        from adiskreader.disks.vhdx import VHDXDisk
+        return VHDXDisk
+    if data[:4] in (b'KDMV', b'COWD'):
+        from adiskreader.disks.vmdk import VMDKDisk
+        return VMDKDisk
+    if data[64:68] == b'\x7f\x10\xda\xbe':
+        from adiskreader.disks.vdi import VDIDisk
+        return VDIDisk
+    if data[:8] == b'conectix':
+        from adiskreader.disks.vhd import VHDDisk
+        return VHDDisk
+    return None
 
 def get_disk_for_extension(extension:str):
     extension = extension.upper()
@@ -65,6 +97,12 @@ def get_disk_for_extension(extension:str):
     if extension.endswith('VMDK') is True:
         from adiskreader.disks.vmdk import VMDKDisk
         return VMDKDisk
+    if extension.endswith('QCOW2') is True:
+        from adiskreader.disks.qcow2 import QCOW2Disk
+        return QCOW2Disk
+    if extension.endswith('VDI') is True:
+        from adiskreader.disks.vdi import VDIDisk
+        return VDIDisk
     if extension.endswith('RAW') is True:
         from adiskreader.disks.raw import RAWDisk
         return RAWDisk

@@ -54,6 +54,10 @@ WIM_FOLDER_NAME = 'wimwin'
 ISO_FIXTURES_ZIP = 'testfiles/adiskreader_iso_fixtures.zip'
 ISO_FOLDER_NAME = 'isowin'
 
+# QCOW2 and VDI disks made by qemu and VirtualBox with make_qemu_fixtures.py, with the contents qemu reads from each disk
+QEMU_FIXTURES_ZIP = 'testfiles/adiskreader_qemu_fixtures.zip'
+QEMU_FOLDER_NAME = 'qemu'
+
 CURRENT_FILE_PATH = pathlib.Path(__file__).parent.absolute()
 TESTFILES_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('testfiles')
 MANIFESTS_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('manifests')
@@ -139,6 +143,30 @@ def get_iso_fixtures():
 					shutil.copyfileobj(f_in, f_out)
 			tmpfilepath.rename(dstfilepath)
 	return folder, manifest
+
+def get_qemu_fixtures():
+	"""Extracts the QCOW2 and VDI disks to testfiles/qemu, returns the folder and the images of the manifest by their names"""
+	folder = TESTFILES_FOLDER_PATH.joinpath(QEMU_FOLDER_NAME)
+	zippath = CURRENT_FILE_PATH.joinpath(QEMU_FIXTURES_ZIP)
+	marker = folder.joinpath('extracted')
+	with zipfile.ZipFile(zippath) as zf:
+		with zf.open('manifest.json') as f:
+			images = json.load(f)['images']
+		# the zip is extracted again when it is replaced
+		stamp = str(zippath.stat().st_mtime_ns)
+		if marker.exists() is False or marker.read_text() != stamp:
+			shutil.rmtree(folder, ignore_errors=True)
+			for info in zf.infolist():
+				if info.filename.startswith('expected/') or info.filename == 'manifest.json':
+					continue
+				zf.extract(info, folder)
+			marker.write_text(stamp)
+	return folder, {image['name']: image for image in images}
+
+def get_qemu_expected(sha256):
+	"""Returns what qemu read from a disk"""
+	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(QEMU_FIXTURES_ZIP)) as zf:
+		return zf.read('expected/%s.raw' % sha256)
 
 def get_diff_fixtures():
 	"""
