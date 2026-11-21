@@ -50,6 +50,10 @@ DIFF_FOLDER_NAME = 'diff'
 WIM_FIXTURES_ZIP = 'testfiles/adiskreader_wim_fixtures.zip'
 WIM_FOLDER_NAME = 'wimwin'
 
+# disc images made by IMAPI2 on Windows (make_iso.ps1)
+ISO_FIXTURES_ZIP = 'testfiles/adiskreader_iso_fixtures.zip'
+ISO_FOLDER_NAME = 'isowin'
+
 CURRENT_FILE_PATH = pathlib.Path(__file__).parent.absolute()
 TESTFILES_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('testfiles')
 MANIFESTS_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('manifests')
@@ -113,6 +117,27 @@ def get_wim_fixtures():
 					with open(tmpfilepath, 'wb') as f_out:
 						shutil.copyfileobj(f_in, f_out)
 				tmpfilepath.rename(dstfilepath)
+	return folder, manifest
+
+def has_iso_fixtures():
+	return CURRENT_FILE_PATH.joinpath(ISO_FIXTURES_ZIP).exists()
+
+def get_iso_fixtures():
+	"""Extracts the disc images made by Windows to testfiles/isowin, returns the folder and the manifest"""
+	folder = TESTFILES_FOLDER_PATH.joinpath(ISO_FOLDER_NAME)
+	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(ISO_FIXTURES_ZIP)) as zf:
+		with zf.open('manifest.json') as f:
+			manifest = json.loads(f.read().decode('utf-8-sig'))
+		for image in manifest['images']:
+			dstfilepath = folder.joinpath(image['file'])
+			if dstfilepath.exists():
+				continue
+			dstfilepath.parent.mkdir(parents=True, exist_ok=True)
+			tmpfilepath = dstfilepath.with_name(dstfilepath.name + '.tmp')
+			with zf.open(image['file']) as f_in:
+				with open(tmpfilepath, 'wb') as f_out:
+					shutil.copyfileobj(f_in, f_out)
+			tmpfilepath.rename(dstfilepath)
 	return folder, manifest
 
 def get_diff_fixtures():

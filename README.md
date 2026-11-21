@@ -42,6 +42,15 @@ Disk images stored inside another image can be opened with `FSFileSource`.
 |---------------------------------|-----------------|-------------------|
 | ✔️                               | ✔️               | ❌                 |
 
+## Optical disc image (iso)
+
+| ISO9660 | Joliet | Rock Ridge | UDF 1.02 - 2.60 |
+|---------|--------|------------|-----------------|
+| ✔️       | ✔️      | ✔️          | ✔️               |
+
+UDF: physical, virtual (VAT), sparable and metadata partitions are read.  
+An image usually describes its files with more than one of these, each of them can be mounted.
+
 ## Partition
 
 | MBR | GPT |
@@ -75,6 +84,10 @@ Interactive sample client that tries to automatically "mount" the disk image spe
 ### Browsing a WIM file
 `adiskreader-console file:///home/user/images/install.wim`  
 The images of the WIM file take the place of the partitions, `mount <index>` selects one.
+
+### Browsing an ISO file
+`adiskreader-console file:///home/user/images/install.iso`  
+The filesystems of the image (UDF, ISO9660 with Rock Ridge, Joliet) take the place of the partitions, the most descriptive one is mounted, `mount <index>` selects another.
 
 ### Parsing a gzipped raw disk image 
 `adiskreader-console file+gz:///home/user/images/test.gz.raw`

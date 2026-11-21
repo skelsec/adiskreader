@@ -115,6 +115,12 @@ as well as the files with more images, named data streams and more parts.
 WIM files made by Windows (DISM) are created by `make_wim.ps1`: run it in an elevated PowerShell on a Windows host and
 copy the zip it creates to `testfiles/adiskreader_wim_fixtures.zip`; `test_wim_windows.py` is skipped without it.
 
+ISO / UDF:
+The images are built by `iso_builder.py` when the tests run, nothing is stored. 7z reads the simpler ones, `test_iso_builder_7z` and `test_udf_builder_7z` check it;
+`test_iso_local_7z` compares against 7z on the disc images other software installed on the machine (VirtualBox, VMware), if there are any.
+Disc images made by Windows (IMAPI2) are created by `make_iso.ps1`: run it in PowerShell on a Windows host (no elevation needed) and
+copy the zip it creates to `testfiles/adiskreader_iso_fixtures.zip`; `test_iso_windows.py` is skipped without it.
+
 MANIFESTS:
 The tests compare the images against the expected contents stored in `manifests/`.
 After changing an image, regenerate them (needs 7z, no root):

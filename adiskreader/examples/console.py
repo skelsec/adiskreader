@@ -19,6 +19,7 @@ from adiskreader._version import __banner__
 from adiskreader.datasource import DataSource
 from adiskreader.disks import Disk
 from adiskreader.filesystems.wim import WIM
+from adiskreader.filesystems.iso import ISOImage
 
 
 class DiskBrowser(aiocmd.PromptToolkitCmd):
@@ -121,16 +122,21 @@ class DiskBrowser(aiocmd.PromptToolkitCmd):
 	async def do_open(self, filepath:str):
 		try:
 			self.__datasource = await DataSource.from_url(filepath)
+			is_iso = False
 			if await WIM.is_wim(self.__datasource) is True:
 				# the images of the WIM file are listed and mounted like the partitions of a disk
 				self.__disk = await WIM.from_datasource(self.__datasource)
+			elif await ISOImage.is_iso(self.__datasource) is True:
+				# the filesystems of the disc image (UDF, ISO9660, Joliet) are listed like the partitions, the first one is the best
+				self.__disk = await ISOImage.from_datasource(self.__datasource)
+				is_iso = True
 			else:
 				self.__disk = await Disk.from_datasource(self.__datasource)
 			await self.do_partinfo(False)
 			if len(self.__partitions) == 0:
 				print('No partitions found!')
 				return False, None
-			if len(self.__partitions) == 1:
+			if len(self.__partitions) == 1 or is_iso is True:
 				await self.do_mount(0)
 				return True, None
 			return True, None
