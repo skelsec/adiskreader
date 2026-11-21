@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../'
 from adiskreader.datasource import DataSource
 from adiskreader.datasource.ssh import SSHFileSource
 from adiskreader.disks import Disk
+from adiskreader.disks.vhd import VHDDisk
 from adiskreader.disks.vhdx import VHDXDisk
 from adiskreader.disks.vmdk import VMDKDisk
 from adiskreader.filesystems.ntfs import NTFS
@@ -83,6 +84,26 @@ async def test_ssh_vmdk(name):
         finally:
             await disk.close()
         # the files opened by the disk are closed, the connection is still usable
+        await ds.seek(0, 0)
+        assert len(await ds.read(4)) == 4
+    finally:
+        await ds.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name, disktype', [('vhd_sub', VHDDisk), ('vhdx_sub', VHDXDisk), ('vhdxfixed_child2', VHDXDisk)])
+async def test_ssh_vhd_diff(name, disktype):
+    # the parents are opened from the server, the ones of the sub images are one directory up
+    path, _ = get_diff_image(name)
+    expected = get_diff_expected(name)
+    ds = await DataSource.from_url(urlparse(SSH_URL)._replace(path = urlparse(SSH_URL).path.rstrip('/') + '/' + path.relative_to(TESTFILES_FOLDER_PATH).as_posix()).geturl())
+    try:
+        disk = await Disk.from_datasource(ds)
+        assert isinstance(disk, disktype)
+        try:
+            for lba in range(0, disk.capacity, 4096):
+                assert await disk.read_sectors(lba, 4096) == expected[lba*512:(lba+4096)*512]
+        finally:
+            await disk.close()
         await ds.seek(0, 0)
         assert len(await ds.read(4)) == 4
     finally:

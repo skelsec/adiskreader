@@ -89,6 +89,11 @@ ovftool t.vmx t.ova                 # before the snapshot, ntfs_test_vmware_ova.
 The disks qemu-img can not create (multiple extents, ESXi snapshots, stream optimized with footer) are built by `vmdk_builder.py` when the tests run.
 If qemu-img is installed, `test_vmdk.py` also checks that qemu reads the same data from them.
 
+Differencing VHD / VHDX:
+The chains (base, two children and one more child in a subdirectory, for dynamic and fixed bases) are made by Windows.
+Run `make_diff_vhd.ps1` in an elevated PowerShell on a Windows host and copy the zip it creates to `testfiles/adiskreader_diff_fixtures.zip`.
+The zip holds the disks, what Windows reads from each of them and a manifest; the tests extract it to `testfiles/diff` (about 820 MB).
+
 MANIFESTS:
 The tests compare the images against the expected contents stored in `manifests/`.
 After changing an image, regenerate them (needs 7z, no root):

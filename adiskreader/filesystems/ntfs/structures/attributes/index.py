@@ -51,10 +51,8 @@ class INDEX_ROOT(Attribute):
                 # no progress made, break out of loop
                 break
 
+            # the entries follow each other, entry_length includes the padding
             si.index_entries.append(entry)
-            # correct padding
-            if (buff.tell() % si.bytes_per_record) != 0:
-                buff.seek(si.bytes_per_record - (buff.tell() % si.bytes_per_record), 1)
 
             if IndexEntryFlag.LAST_ENTRY in entry.flags:
                 break
@@ -153,12 +151,6 @@ class IndexRecord:
         ir = IndexRecord()
         ir.magic = buff.read(4)
         if ir.magic != b'INDX':
-            ##### DEBUGGING #####
-            print('------ ERRR (IndexRecord) -------')
-            buff.seek(-16, 1)
-            print(buff.read()[0:400])
-            print(buff.tell())
-            input()
             raise Exception('Invalid magic for Index Record! Expected INDX, got {}'.format(ir.magic))
         ir.usa_offset = int.from_bytes(buff.read(2), 'little')
         ir.usa_count = int.from_bytes(buff.read(2), 'little')

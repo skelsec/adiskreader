@@ -234,6 +234,7 @@ class MetaDataRegion:
         self.ChunkRatio = None
         self.LeaveBlockAllocated = None
         self.HasParent = None
+        self.ParentLocator:ParentLocator = None
         self.lba_per_block = None
 
 
@@ -256,7 +257,7 @@ class MetaDataRegion:
                         VHDX_KNOWN_METADATA_ITEMS[str(tableentry.ItemId).upper()].from_bytes(idata))
                     )
             else:
-                region.items.append('UNKNOWN', idata)
+                region.items.append(('UNKNOWN', idata))
         
         for itype, item in region.items:
             if isinstance(item, FileParameters):
@@ -271,6 +272,8 @@ class MetaDataRegion:
                 region.PhysicalSectorSize = item.PhysicalSectorSize
             elif isinstance(item, VirtualDiskId):
                 region.VirtualDiskId = item.VirtualDiskId
+            elif isinstance(item, ParentLocator):
+                region.ParentLocator = item
         
         VHDX_MAX_SECTORS_PER_BLOCK = 2**23
         region.ChunkRatio = (VHDX_MAX_SECTORS_PER_BLOCK * region.LogicalSectorSize) // region.BlockSize
@@ -368,9 +371,9 @@ class MetaDataTableEntry:
         
         entry.Reserved = buff.read(4)
         flagfield = entry.Reserved[0]
-        entry.isUser = bool(flagfield >> 3) #msb of reserved
-        entry.isVirtualDisk = bool( (flagfield >> 2) & 1) #2nd msb of reserved
-        entry.isRequired = bool( (flagfield >> 1) & 1)
+        entry.isUser = bool(flagfield & 1)
+        entry.isVirtualDisk = bool( (flagfield >> 1) & 1)
+        entry.isRequired = bool( (flagfield >> 2) & 1)
         entry.Reserved2 = buff.read(4)
         return entry
     
@@ -404,8 +407,8 @@ class FileParameters:
         file_parameters.BlockSize = int.from_bytes(buff.read(4), byteorder='little', signed=False)
         file_parameters.Reserved = buff.read(4)
         flagfield = file_parameters.Reserved[0]
-        file_parameters.LeaveBlockAllocated = bool(flagfield >> 7)
-        file_parameters.HasParent = bool((flagfield >> 6) & 1)
+        file_parameters.LeaveBlockAllocated = bool(flagfield & 1)
+        file_parameters.HasParent = bool((flagfield >> 1) & 1)
         return file_parameters
 
     def __str__(self) -> str:
@@ -497,9 +500,9 @@ class ParentLocator:
         self.LocatorType = None
         self.Reserved = None
         self.KeyValueCount = None
-        self.Entries = []
+        self.entries = []
 
-        self.kv = {}
+        self.kv = {} # parent_linkage, parent_linkage2, relative_path, volume_path, absolute_win32_path
 
     @staticmethod
     def from_bytes(data:bytes):
@@ -507,6 +510,8 @@ class ParentLocator:
     
     @staticmethod
     def from_buffer(buff):
+        # the offsets of the keys and values are relative to the start of the locator
+        buff = io.BytesIO(buff.read())
         parent_locator = ParentLocator()
         parent_locator.LocatorType = uuid.UUID(bytes_le=buff.read(16))
         parent_locator.Reserved = buff.read(2)
@@ -523,11 +528,7 @@ class ParentLocator:
 
     def __str__(self) -> str:
         t = '== ParentLocator ==\n'
-        t += f'PlatformCode: {self.PlatformCode.hex()}\n'
-        t += f'PlatformDataSpace: {self.PlatformDataSpace}\n'
-        t += f'PlatformDataLength: {self.PlatformDataLength}\n'
-        t += f'Reserved: {self.Reserved.hex()}\n'
-        t += f'PlatformData: {self.PlatformData.hex()}'
+        t += f'LocatorType: {self.LocatorType}\n'
         for key in self.kv:
             t += f'  {key}: {self.kv[key]}\n'
         return t

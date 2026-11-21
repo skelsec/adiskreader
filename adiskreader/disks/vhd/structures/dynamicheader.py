@@ -57,9 +57,14 @@ class VHDDynamicHeader:
         t.append(f"ParentUniqueId: {self.ParentUniqueId}")
         t.append(f"ParentTimeStamp: {self.ParentTimeStamp}")
         t.append(f"Reserved: {self.Reserved}")
-        t.append(f"ParentUnicodeName: {self.ParentUnicodeName}")
+        t.append(f"ParentUnicodeName: {self.parent_name}")
         t.append(f"ParentLocatorEntries: {self.ParentLocatorEntries}")
         return '\n'.join(t)
+
+    @property
+    def parent_name(self):
+        """The absolute path of the parent disk on the machine the disk was created on"""
+        return self.ParentUnicodeName.decode('utf-16-be', errors='replace').split('\x00')[0]
 
 class ParentLocatorEntry:
     def __init__(self):

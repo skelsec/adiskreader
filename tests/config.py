@@ -3,6 +3,7 @@ import pathlib
 import gzip
 import json
 import shutil
+import zipfile
 
 
 VFAT_16_TEST_FILE_GZ = 'testfiles/vfat_16_test.img.gz'
@@ -35,6 +36,10 @@ VMDK_SNAPSHOT2_WRITES = [
 	(0x400000, 0x100000, 0x00),
 ]
 
+# differencing vhd / vhdx chains made by Windows with make_diff_vhd.ps1, with the contents Windows reads from each disk
+DIFF_FIXTURES_ZIP = 'testfiles/adiskreader_diff_fixtures.zip'
+DIFF_FOLDER_NAME = 'diff'
+
 CURRENT_FILE_PATH = pathlib.Path(__file__).parent.absolute()
 TESTFILES_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('testfiles')
 MANIFESTS_FOLDER_PATH = CURRENT_FILE_PATH.joinpath('manifests')
@@ -63,6 +68,48 @@ def get_image(image_gz, compressed = False):
 	if compressed is True:
 		return image_gz_path
 	return decompress_gzip(image_gz_path)
+
+def get_diff_fixtures():
+	"""
+	Extracts the differencing disks to testfiles/diff, returns the folder and the images of the manifest.
+	The disks are decompressed, their expected contents (image['raw']) are left gzipped.
+	"""
+	folder = TESTFILES_FOLDER_PATH.joinpath(DIFF_FOLDER_NAME)
+	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(DIFF_FIXTURES_ZIP)) as zf:
+		with zf.open('manifest.json') as f:
+			images = json.load(f)['images']
+		for info in zf.infolist():
+			# the zip is made on Windows
+			name = info.filename.replace('\\', '/')
+			if name.endswith('/') or name == 'manifest.json':
+				continue
+			decompress = name.endswith('.raw.gz') is False
+			dstfilepath = folder.joinpath(name[:-3] if decompress is True else name)
+			if dstfilepath.exists():
+				continue
+			dstfilepath.parent.mkdir(parents=True, exist_ok=True)
+			tmpfilepath = dstfilepath.with_name(dstfilepath.name + '.tmp')
+			with zf.open(info) as f_in:
+				with open(tmpfilepath, 'wb') as f_out:
+					shutil.copyfileobj(gzip.open(f_in, 'rb') if decompress is True else f_in, f_out)
+			tmpfilepath.rename(dstfilepath)
+	return folder, images
+
+def get_diff_image(name):
+	"""Returns the path of the differencing disk (<chain>_<level>) and its entry in the manifest"""
+	folder, images = get_diff_fixtures()
+	chain, level = name.split('_')
+	for image in images:
+		if image['chain'] == chain and image['level'] == level:
+			return folder.joinpath(image['file']), image
+	raise Exception('No such image: %s' % name)
+
+def get_diff_expected(name):
+	"""Returns what Windows read from the differencing disk"""
+	folder, _ = get_diff_fixtures()
+	_, image = get_diff_image(name)
+	with gzip.open(folder.joinpath(image['raw']), 'rb') as f:
+		return f.read()
 
 def load_manifest(name):
 	"""Returns the expected contents of a test image: {'dirs': [path], 'files': {path: {'size', 'sha256'}}}"""

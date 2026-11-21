@@ -17,6 +17,7 @@ from adiskreader.datasource import DataSource
 from adiskreader.datasource.smb import SMBFileSource
 from adiskreader.disks import Disk
 from adiskreader.disks.raw import RAWDisk
+from adiskreader.disks.vhd import VHDDisk
 from adiskreader.disks.vhdx import VHDXDisk
 from adiskreader.disks.vmdk import VMDKDisk
 from adiskreader.filesystems.ntfs import NTFS
@@ -131,6 +132,26 @@ async def test_smb_vmdk(name):
         finally:
             await disk.close()
         # the files opened by the disk are closed, the connection is still usable
+        await ds.seek(0, 0)
+        assert len(await ds.read(4)) == 4
+    finally:
+        await ds.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name, disktype', [('vhd_sub', VHDDisk), ('vhdx_sub', VHDXDisk), ('vhdxfixed_child2', VHDXDisk)])
+async def test_smb_vhd_diff(name, disktype):
+    # the parents are opened from the share, the ones of the sub images are one directory up
+    path, _ = get_diff_image(name)
+    expected = get_diff_expected(name)
+    ds = await DataSource.from_url(SMB_URL.rstrip('/') + '/' + path.relative_to(TESTFILES_FOLDER_PATH).as_posix())
+    try:
+        disk = await Disk.from_datasource(ds)
+        assert isinstance(disk, disktype)
+        try:
+            for lba in range(0, disk.capacity, 4096):
+                assert await disk.read_sectors(lba, 4096) == expected[lba*512:(lba+4096)*512]
+        finally:
+            await disk.close()
         await ds.seek(0, 0)
         assert len(await ds.read(4)) == 4
     finally:
