@@ -168,6 +168,7 @@ tests/testfiles/diff/
 tests/testfiles/wimwin/
 *.iso
 tests/testfiles/isowin/
+tests/testfiles/ntfswin/
 *.qcow2
 *.vdi
 tests/testfiles/qemu/

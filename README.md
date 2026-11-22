@@ -85,7 +85,7 @@ An image usually describes its files with more than one of these, each of them c
 |-------|-------|-------|------|------|------|--------|
 | ✔️     | ✔️     | ✔️     | ✔️    | ✔️    | ❌    | ❌     |
 
-NTFS: compressed (LZNT1) and sparse files are read, alternate data streams can be opened. Files compressed by the newer "system compression" (CompactOS, `compact /exe`) and encrypted (EFS) files are not supported.
+NTFS: compressed (LZNT1) and sparse files are read, alternate data streams can be opened. Files compressed by the newer "system compression" (CompactOS, `compact /exe`: XPRESS4K, XPRESS8K, XPRESS16K, LZX) are read as well, the ones backed by a WIM file (WIMBoot) are not. Encrypted (EFS) files are not supported.
 
 # Install
 Python 3.10 or newer is needed. `git clone` and `pip install .` should do the trick.  

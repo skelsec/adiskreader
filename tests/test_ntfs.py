@@ -1,4 +1,5 @@
 import pytest
+import hashlib
 import os
 import ntpath
 import random
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../'
 
 from adiskreader.datasource.file import FileSource
 from adiskreader.datasource.gzipfile import GzipFileSource
+from adiskreader.disks import Disk
 from adiskreader.disks.raw import RAWDisk
 from adiskreader.disks.vhdx import VHDXDisk
 from adiskreader.disks.vmdk import VMDKDisk
@@ -334,3 +336,94 @@ async def test_ntfs_compressed_same_as_plain(cluster_size):
     for offset, size in [(unit - 1, 2), (unit, unit), (unit - 5, unit + 10), (0, 1), (300000 - 1, 10), (2*unit, 0), (300000, 5)]:
         assert await fs_read(compressed, offset, size) == await fs_read(plain, offset, size)
         assert await compressed.tell() == await plain.tell()
+
+
+# volumes written by Windows (make_ntfs_compressed.ps1): the files compressed by NTFS (LZNT1) and by the WOF driver
+# (XPRESS, LZX), sparse files, named data streams, files longer than their valid data, runs listed by an attribute list
+
+WINDOWS_VOLUMES = [0, 1]
+
+async def open_windows_fs(index):
+    folder, manifest = get_ntfs_fixtures()
+    volume = manifest['volumes'][index]
+    ds = await FileSource.from_file(str(folder.joinpath(volume['image'])))
+    disk = await Disk.from_datasource(ds)
+    partitions = await disk.list_partitions()
+    fs = await NTFS.from_partition(partitions[volume['partition'] - 1])
+    assert fs.cluster_size == volume['cluster_size']
+    return fs, manifest, volume
+
+def windows_streams(manifest):
+    """The streams of the files of the manifest: path to open, description"""
+    for file_path, expected in manifest['files'].items():
+        yield file_path, expected
+        for name, stream in expected['streams'].items():
+            yield file_path + ':' + name, stream
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('index', WINDOWS_VOLUMES)
+async def test_ntfs_windows_file_list(index):
+    fs, manifest, _ = await open_windows_fs(index)
+    await check_file_list(fs, manifest)
+    await check_file_stat(fs, manifest)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('index', WINDOWS_VOLUMES)
+async def test_ntfs_windows_file_read(index, ntfs_decompressor):
+    fs, manifest, _ = await open_windows_fs(index)
+    rng = random.Random(index)
+    kinds = set()
+    for path, expected in windows_streams(manifest):
+        file = await fs.open(path)
+        odata = await file.read()
+        assert len(odata) == expected['size'], path
+        assert hashlib.sha256(odata).hexdigest() == expected['sha256'], path
+        assert await file.tell() == expected['size']
+        assert await file.read(10) == b''
+        kinds.add(expected['kind'])
+        # the partial reads are verified against the full read
+        fsize = expected['size']
+        for _ in range(10):
+            pos = rng.randint(0, fsize)
+            size = rng.randint(0, min(fsize - pos, 200000))
+            assert await fs_read(file, pos, size) == odata[pos:pos+size], path
+        await file.seek(-min(fsize, 5000), 2)
+        assert await file.read() == odata[-5000:]
+    for kind in ['lznt1', 'lznt1_stored', 'lznt1_attribute_list', 'lznt1_valid_data', 'lznt1_sparse', 'lznt1_streams', 'resident',
+                 'plain', 'valid_data', 'sparse', 'streams', 'wof_xpress4k', 'wof_xpress8k', 'wof_xpress16k', 'wof_lzx']:
+        assert kind in kinds
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('index', WINDOWS_VOLUMES)
+async def test_ntfs_windows_files_are_stored(index):
+    # the files are stored the way their kind says, the tests above read what they are named after
+    fs, manifest, volume = await open_windows_fs(index)
+    for path, expected in windows_streams(manifest):
+        kind = expected['kind']
+        file = await fs.open(path)
+        header = file.get_dataattr().header
+        if kind == 'resident':
+            assert header.non_resident is False
+        elif kind.startswith('lznt1') and header.non_resident is True:
+            assert header.flags & AttributeHeaderFlag.COMPRESSED and header.compression_unit == 4, path
+        elif kind in ('plain', 'valid_data'):
+            assert not header.flags & AttributeHeaderFlag.COMPRESSED and header.compression_unit == 0, path
+        elif kind in ('sparse', 'lznt1_sparse'):
+            assert header.flags & AttributeHeaderFlag.SPARSE, path
+        elif kind.startswith('wof'):
+            if volume['files'][path]['stored_size']['$DATA'] >= expected['size']:
+                # Windows left it as it was: it would not take fewer clusters this way
+                assert len(await file.get_record().get_attribute(0xC0)) == 0
+                continue
+            # the unnamed stream has no clusters, the data is in the stream of the WOF driver
+            assert header.flags & AttributeHeaderFlag.SPARSE, path
+            stream = await fs.open(path + ':WofCompressedData')
+            await stream.seek(0, 2)
+            assert 0 < await stream.tell() < expected['size']
+        if kind in ('valid_data', 'lznt1_valid_data') and header.non_resident is True:
+            assert header.init_size == expected['valid_data_length'] < header.real_size, path
+    if volume['cluster_size'] == 512:
+        # with 4096 byte clusters the runs of the file fit in its file record
+        record = (await fs.open('lznt1\\attribute_list.txt')).get_record()
+        assert len(await record.get_attribute(0x20)) == 1
+        assert len(await record.get_attribute(0x80, name='')) > 1

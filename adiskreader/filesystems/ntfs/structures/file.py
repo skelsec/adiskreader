@@ -5,6 +5,26 @@ import math
 from adiskreader.compression.lznt1 import lznt1_decompress
 from adiskreader.filesystems.ntfs.structures.attributes import AttributeHeaderFlag
 
+# files compressed by the WOF driver ("compact /exe", CompactOS): the unnamed stream is sparse, the data is in this stream
+# the reparse point of the file has the compression: WOF version, provider, version of the provider, algorithm
+IO_REPARSE_TAG_WOF = 0x80000017
+WOF_PROVIDER_FILE = 2
+WOF_STREAM_NAME = 'WofCompressedData'
+# algorithm -> compression, size of the chunks
+WOF_ALGORITHMS = {
+    0 : ('XPRESS', 4096),
+    1 : ('LZX', 32768),
+    2 : ('XPRESS', 8192),
+    3 : ('XPRESS', 16384),
+}
+
+def get_wof_decompressor(compression):
+    if compression == 'XPRESS':
+        from adiskreader.compression.xpress import xpress_decompress
+        return xpress_decompress
+    from adiskreader.compression.lzx import lzx_decompress
+    return lzx_decompress
+
 class NTFSFile:
     def __init__(self, fs, fr, datastream = ''):
         self.__fs = fs
@@ -19,6 +39,7 @@ class NTFSFile:
         self.__run_vcns = [] # first cluster of the file (VCN) in each of the runs
         self.__cu_clusters = 0 # clusters in a compression unit, 0 when the file is not compressed
         self.__cu_cache = (None, b'') # index and data of the compression unit read last
+        self.__wof = None # (file of the compressed stream, chunk size, decompressor, size of the chunk table, ends of the chunks) of the WOF compressed file
         self.datastream = datastream
 
         self.__pos = 0
@@ -150,6 +171,69 @@ class NTFSFile:
             buff.write(data[max(start - cu_start, 0):end - cu_start])
         return buff.getvalue()
 
+    async def setup_wof(self):
+        """Checks if the file is compressed by the WOF driver, reads the table of its chunks"""
+        if self.datastream != '' or self.__real_size == 0:
+            return
+        algorithm = None
+        for attr in await self.__fr.get_attribute(0xC0):
+            if getattr(attr, 'reparse_type', None) != IO_REPARSE_TAG_WOF or attr.reparse_data is None or len(attr.reparse_data) < 16:
+                continue
+            _, provider, _, algorithm = [int.from_bytes(attr.reparse_data[i:i+4], 'little') for i in range(0, 16, 4)]
+            if provider != WOF_PROVIDER_FILE:
+                # the data is in a WIM file
+                raise NotImplementedError('WIM backed files are not supported')
+        if algorithm is None:
+            return
+        if algorithm not in WOF_ALGORITHMS:
+            raise NotImplementedError('WOF compression %s is not supported' % algorithm)
+        compression, chunk_size = WOF_ALGORITHMS[algorithm]
+        stream = NTFSFile(self.__fs, self.__fr, WOF_STREAM_NAME)
+        await stream.setup()
+        await stream.seek(0, 2)
+        stream_size = await stream.tell()
+        # the stream starts with the ends of the chunks (the last one ends with the stream), counted from the end of this table
+        chunk_count = (self.__real_size + chunk_size - 1) // chunk_size
+        entry_size = 4 if self.__real_size <= 0xFFFFFFFF else 8
+        table_size = (chunk_count - 1) * entry_size
+        await stream.seek(0, 0)
+        table = await stream.read(table_size)
+        if len(table) != table_size:
+            raise Exception('The chunk table of the WOF compressed file is truncated')
+        ends = [table_size + int.from_bytes(table[i:i+entry_size], 'little') for i in range(0, table_size, entry_size)]
+        ends.append(stream_size)
+        self.__wof = (stream, chunk_size, get_wof_decompressor(compression), table_size, ends)
+
+    async def read_wof_chunk(self, index):
+        if self.__cu_cache[0] == index:
+            return self.__cu_cache[1]
+        stream, chunk_size, decompress, table_size, ends = self.__wof
+        start = ends[index - 1] if index > 0 else table_size
+        out_size = min(chunk_size, self.__real_size - index * chunk_size)
+        if ends[index] < start or ends[index] - start > out_size:
+            raise Exception('Invalid chunk table in the WOF compressed file')
+        await stream.seek(start, 0)
+        data = await stream.read(ends[index] - start)
+        if len(data) != ends[index] - start:
+            raise Exception('The WOF compressed file is truncated')
+        if len(data) != out_size:
+            # chunks which could not be compressed are stored as they are
+            data = decompress(data, out_size)
+        self.__cu_cache = (index, data)
+        return data
+
+    async def read_wof(self, size):
+        """Reads size bytes of a WOF compressed file from the current position, the caller keeps it inside of the file"""
+        start = self.__pos
+        end = start + size
+        chunk_size = self.__wof[1]
+        buff = io.BytesIO()
+        for index in range(start // chunk_size, (end + chunk_size - 1) // chunk_size):
+            data = await self.read_wof_chunk(index)
+            chunk_start = index * chunk_size
+            buff.write(data[max(start - chunk_start, 0):end - chunk_start])
+        return buff.getvalue()
+
     async def setup(self):
         # parse the data attribute
         dataattrs = await self.__fr.get_attribute(0x80, name = self.datastream)
@@ -186,6 +270,7 @@ class NTFSFile:
                 self.__cu_clusters = 1 << first.compression_unit
             elif self.__real_size > allocated:
                 raise Exception('The data runs of the file are shorter than the file')
+            await self.setup_wof()
 
     async def tell(self):
         if self.__dataattr.header.non_resident is False:
@@ -226,7 +311,9 @@ class NTFSFile:
                 size = self.__real_size - self.__pos
             if size < 1:
                 return b''
-            if self.__cu_clusters != 0:
+            if self.__wof is not None:
+                data = await self.read_wof(size)
+            elif self.__cu_clusters != 0:
                 data = await self.read_compressed(size)
             else:
                 data = await self.read_runs(size)
