@@ -37,9 +37,9 @@ setup(
 	description="",
 
 	# long_description=open("README.txt").read(),
-	python_requires='>=3.6',
+	python_requires='>=3.10',
 	classifiers=[
-		"Programming Language :: Python :: 3.6",
+		"Programming Language :: Python :: 3",
 		"License :: OSI Approved :: MIT License",
 		"Operating System :: OS Independent",
 	],
