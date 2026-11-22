@@ -1,5 +1,5 @@
 //! adiskreader_native: native versions of the decompressors of adiskreader.compression.
-//! Ports of the Python decoders (xpress.py, lzx.py, lzms.py, lz4.py, veeamrle.py), they accept and reject the same input.
+//! Ports of the Python decoders (xpress.py, lzx.py, lzms.py, lz4.py, lznt1.py, veeamrle.py), they accept and reject the same input.
 //! adiskreader uses this module when it can be imported, nothing else is needed.
 
 use pyo3::exceptions::PyValueError;
@@ -10,6 +10,7 @@ mod bits;
 mod crc;
 mod huffman;
 mod lz4;
+mod lznt1;
 mod lzms;
 mod lzx;
 mod veeamrle;
@@ -70,6 +71,17 @@ fn lz4_decompress<'py>(py: Python<'py>, data: &[u8], out_size: usize) -> PyResul
     }
 }
 
+/// Decompresses the LZNT1 chunks of a compression unit of an NTFS file, out_size is the size of the result
+#[pyfunction]
+fn lznt1_decompress<'py>(py: Python<'py>, data: &[u8], out_size: usize) -> PyResult<Bound<'py, PyBytes>> {
+    check_out_size(out_size)?;
+    let res = py.detach(|| lznt1::decompress(data, out_size));
+    match res {
+        Ok(out) => Ok(PyBytes::new(py, &out)),
+        Err(e) => Err(PyValueError::new_err(e)),
+    }
+}
+
 /// Decompresses the run length encoded data of a block of a Veeam backup file, out_size is the size of the result
 #[pyfunction]
 fn veeam_rle_decompress<'py>(py: Python<'py>, data: &[u8], out_size: usize) -> PyResult<Bound<'py, PyBytes>> {
@@ -94,6 +106,7 @@ fn adiskreader_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzx_decompress, m)?)?;
     m.add_function(wrap_pyfunction!(lzms_decompress, m)?)?;
     m.add_function(wrap_pyfunction!(lz4_decompress, m)?)?;
+    m.add_function(wrap_pyfunction!(lznt1_decompress, m)?)?;
     m.add_function(wrap_pyfunction!(veeam_rle_decompress, m)?)?;
     m.add_function(wrap_pyfunction!(crc32c, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

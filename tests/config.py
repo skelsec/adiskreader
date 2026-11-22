@@ -42,6 +42,12 @@ VMDK_SNAPSHOT2_WRITES = [
 # ntfs image holding diff_vhd_base.vhd and diff_vhd_child1.vhd of the differencing chains, for reading disks stored in a filesystem
 NESTED_NTFS_TEST_FILE_GZ = 'testfiles/nested_ntfs.img.gz'
 
+# NTFS volumes (no partition table) with compressed files, by cluster size, made by make_ntfs_compressed.py
+NTFS_COMPRESSED_FILES_GZ = {
+	4096 : 'testfiles/ntfs_compressed_4k.img.gz',
+	512  : 'testfiles/ntfs_compressed_512.img.gz',
+}
+
 # wim file without compression made by 7z, the xpress, lzx and lzms compressed ones are built from it (wim_builder.py)
 WIM_TEST_FILE_GZ = 'testfiles/wim_test.wim.gz'
 

@@ -1,0 +1,65 @@
+{
+	"dirs": [
+		"compressed",
+		"compressed\\sub",
+		"plain"
+	],
+	"files": {
+		"compressed\\holes.bin": {
+			"size": 1070000,
+			"sha256": "986e0454cd1bcfcda2888eae92943ddb4b364b186ac41ea0da7809ca9cf49b6b"
+		},
+		"compressed\\long_matches.bin": {
+			"size": 162000,
+			"sha256": "56616dd3b2e4ac7c8403d920d632149d4d52a0bb8bb9aefba0a0e1bdcff46fd3"
+		},
+		"compressed\\low_entropy.bin": {
+			"size": 150000,
+			"sha256": "f41db8072af935de3032016e156c240b3464c965e5ce17fd5a82b99d92f1a42e"
+		},
+		"compressed\\mixed.bin": {
+			"size": 320000,
+			"sha256": "d6e025d93145dd454e6246ab03ad23c969cb5bdd2b698bb799ab095759862d7e"
+		},
+		"compressed\\random.bin": {
+			"size": 100000,
+			"sha256": "de965c8e94b9f221bc3f28436d5fb5939c11d3b8fc75b0437dbe50ca2a5c685e"
+		},
+		"compressed\\short.txt": {
+			"size": 3000,
+			"sha256": "0ed7ea90f3890e45d7955627fd16c9e5f6deb4b557c44e6780b8961d2e3497e9"
+		},
+		"compressed\\small.txt": {
+			"size": 100,
+			"sha256": "381d8c3893a113f96127f1b6bc28878bed7ae40861e7a4cdeca92991816bd7a8"
+		},
+		"compressed\\sub\\nested.txt": {
+			"size": 90000,
+			"sha256": "6ba894fc994779ad2f20ecd5991d5f97debaa721223cf331ce9fee0fc8a6b21f"
+		},
+		"compressed\\text.txt": {
+			"size": 300000,
+			"sha256": "881e34edea6343e5f44a2876f3ff8afbd4b230332026b371f36970f344161277"
+		},
+		"compressed\\unit_4k.txt": {
+			"size": 65536,
+			"sha256": "f29c4b47986dda8342342253b4c362bbc2e2e1f6a71fe47ea65aa9b568440efc"
+		},
+		"compressed\\unit_512.txt": {
+			"size": 8192,
+			"sha256": "b75bda6a480e8e4c53aa1f10ce1988a3ead117c56fb2f33774ebd32f78afd8a5"
+		},
+		"compressed\\unit_and_byte.txt": {
+			"size": 131073,
+			"sha256": "b8b8dba40d9453648528521f91b26bcc0c2ab0a82fbeeec0b5fde3f25eeaf146"
+		},
+		"compressed\\zeros.bin": {
+			"size": 200000,
+			"sha256": "4cbbd9be0cba685835755f827758705db5a413c5494c34262cd25946a73e7582"
+		},
+		"plain\\text.txt": {
+			"size": 300000,
+			"sha256": "881e34edea6343e5f44a2876f3ff8afbd4b230332026b371f36970f344161277"
+		}
+	}
+}
