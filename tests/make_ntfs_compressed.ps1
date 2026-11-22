@@ -534,7 +534,8 @@ try {
 
         Write-Host ("Reading the files of {0} back" -f $volume.label)
         $number = Mount-Image $image -ReadOnly
-        $files = Test-Volume (Get-VolumeRoot $number $partition.PartitionNumber)
+        # not $files: that is $script:Files here, the names of the variables are case insensitive
+        $readback = Test-Volume (Get-VolumeRoot $number $partition.PartitionNumber)
         Dismount-Image $image | Out-Null
         $made += [ordered]@{
             image        = $volume.image
@@ -543,7 +544,7 @@ try {
             partition    = $partition.PartitionNumber
             offset       = $partition.Offset
             size         = $partition.Size
-            files        = $files
+            files        = $readback
         }
     }
 }
