@@ -42,6 +42,12 @@ VMDK_SNAPSHOT2_WRITES = [
 # ntfs image holding diff_vhd_base.vhd and diff_vhd_child1.vhd of the differencing chains, for reading disks stored in a filesystem
 NESTED_NTFS_TEST_FILE_GZ = 'testfiles/nested_ntfs.img.gz'
 
+# NTFS volumes (no partition table) with compressed files, by cluster size, made by make_ntfs_compressed.py
+NTFS_COMPRESSED_FILES_GZ = {
+	4096 : 'testfiles/ntfs_compressed_4k.img.gz',
+	512  : 'testfiles/ntfs_compressed_512.img.gz',
+}
+
 # wim file without compression made by 7z, the xpress, lzx and lzms compressed ones are built from it (wim_builder.py)
 WIM_TEST_FILE_GZ = 'testfiles/wim_test.wim.gz'
 
@@ -56,6 +62,10 @@ WIM_FOLDER_NAME = 'wimwin'
 # backup files made by Veeam Backup & Replication 13 with make_vbk.ps1, with the contents of the disks at each run
 VBK_FIXTURES_ZIP = 'testfiles/vbk_fixtures.zip'
 VBK_FOLDER_NAME = 'vbk'
+
+# NTFS volumes written by Windows: compressed (LZNT1, WOF) and sparse files, named data streams, see make_ntfs_compressed.ps1
+NTFS_FIXTURES_ZIP = 'testfiles/adiskreader_ntfs_fixtures.zip'
+NTFS_FOLDER_NAME = 'ntfswin'
 
 # disc images made by IMAPI2 on Windows (make_iso.ps1)
 ISO_FIXTURES_ZIP = 'testfiles/adiskreader_iso_fixtures.zip'
@@ -87,6 +97,7 @@ FIXTURES_SHA256 = {
 	'adiskreader_qemu_fixtures.zip'       : '14bfdf9afd2816f6a4134a472b60417d679d0122d30f862cbe3eddcf88fd9888',
 	'adiskreader_wim_fixtures.zip'        : '31647f4458f9130712c9d0f525df488484bc7ddaa1733484ecb997a2e2163208',
 	'vbk_fixtures.zip'                    : '872918794c4ed613a3660406dad4911b3d2a332e04cc611d1c51dd054574071b',
+	'adiskreader_ntfs_fixtures.zip'       : '9d48ff355ed799a0cd721229ba2e3fb68e801a3c56ff019a5897bf2b21d92ec1',
 	'ntfs_test_dynamic.vhdx.gz'           : '9223b3bdacbd5af719377afa15fb1db1860efca1a388afe490cd18e50511f4ef',
 	'ntfs_test_fixed.vhdx.gz'             : '326c07a59b2fc232d07ba5b15dc59924dc66ab3a2c685ebdfbcf82f1dce01040',
 	'ntfs_test_monolithicSparse.vmdk.gz'  : 'bc3f2a4956a6088d78bf2c4731ac66f7ab94d6ed49c70dd325abff171dfb8aac',
@@ -206,6 +217,20 @@ def get_vbk_fixtures():
 			zf.extractall(folder)
 		marker.write_text(stamp)
 	folder = folder.joinpath('vbk_fixtures')
+	return folder, json.loads(folder.joinpath('manifest.json').read_text(encoding='utf-8-sig'))
+
+def get_ntfs_fixtures():
+	"""Extracts the NTFS disks made by Windows to testfiles/ntfswin, returns the folder and the manifest"""
+	folder = TESTFILES_FOLDER_PATH.joinpath(NTFS_FOLDER_NAME)
+	zippath = get_fixture(NTFS_FIXTURES_ZIP)
+	marker = folder.joinpath('extracted')
+	# the zip is extracted again when it is replaced
+	stamp = str(zippath.stat().st_mtime_ns)
+	if marker.exists() is False or marker.read_text() != stamp:
+		shutil.rmtree(folder, ignore_errors=True)
+		with zipfile.ZipFile(zippath) as zf:
+			zf.extractall(folder)
+		marker.write_text(stamp)
 	return folder, json.loads(folder.joinpath('manifest.json').read_text(encoding='utf-8-sig'))
 
 def has_iso_fixtures():

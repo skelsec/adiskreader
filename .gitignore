@@ -168,6 +168,7 @@ tests/testfiles/diff/
 tests/testfiles/wimwin/
 *.iso
 tests/testfiles/isowin/
+tests/testfiles/ntfswin/
 *.qcow2
 *.vdi
 tests/testfiles/qemu/
@@ -180,6 +181,8 @@ tests/testfiles/vbk/
 tests/testfiles/*.zip
 tests/testfiles/*.gz
 !tests/testfiles/nested_ntfs.img.gz
+!tests/testfiles/ntfs_compressed_4k.img.gz
+!tests/testfiles/ntfs_compressed_512.img.gz
 !tests/testfiles/ntfs_test.img.gz
 !tests/testfiles/small_ntfs_test.vhdx.gz
 !tests/testfiles/vfat_16_test.img.gz

@@ -289,8 +289,12 @@ class VHDXDisk(Disk):
         # If the range is small enough and within one block, do partial read on the block and extract the data
         if first_block_idx == last_block_idx:
             self.__stats['single_block_read'] += 1
-            if count < 3000 and first_block_idx not in self.__block_cache:
-                offset = (first_lba % self.active_meta.lba_per_block) * self.active_meta.LogicalSectorSize
+            offset = (first_lba % self.active_meta.lba_per_block) * self.active_meta.LogicalSectorSize
+            if first_block_idx in self.__block_cache:
+                # only the part needed is copied, the blocks are large
+                self.__stats['block_cache_hit'] += 1
+                return self.__block_cache[first_block_idx][offset:offset + count * self.active_meta.LogicalSectorSize]
+            if count < 3000:
                 return await self.read_block(first_block_idx, start_offset=offset, length=count * self.active_meta.LogicalSectorSize)
         else:
             self.__stats['multiple_block_read'] += 1

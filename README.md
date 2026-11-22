@@ -85,10 +85,12 @@ An image usually describes its files with more than one of these, each of them c
 |-------|-------|-------|------|------|------|--------|
 | ✔️     | ✔️     | ✔️     | ✔️    | ✔️    | ❌    | ❌     |
 
+NTFS: compressed (LZNT1) and sparse files are read, alternate data streams can be opened. Files compressed by the newer "system compression" (CompactOS, `compact /exe`: XPRESS4K, XPRESS8K, XPRESS16K, LZX) are read as well, the ones backed by a WIM file (WIMBoot) are not. Encrypted (EFS) files are not supported.
+
 # Install
 Python 3.10 or newer is needed. `git clone` and `pip install .` should do the trick.  
 After install use the `adiskreader-console` executable for the sample client.  
-The optional [native decompressors](#native-decompressors) make reading the compressed formats (WIM, ESD, Veeam backups) much faster.
+The optional [native decompressors](#native-decompressors) make reading the compressed formats (WIM, ESD, Veeam backups, compressed NTFS files) much faster.
 
 # Usage
 
@@ -121,7 +123,7 @@ The filesystems of the image (UDF, ISO9660 with Rock Ridge, Joliet) take the pla
 `adiskreader-console file+gz:///home/user/images/test.gz.raw`
 
 ## Native decompressors
-The XPRESS, LZX, LZMS, LZ4 and Veeam RLE decompressors and the CRC32C checksum are written in Python, the optional `adiskreader_native` module (Rust) has the same ones much faster (about 50 times for the first three). The checksums of the Veeam backup files are verified only when the module is installed, unless asked for.
+The XPRESS, LZX, LZMS, LZ4, LZNT1 and Veeam RLE decompressors and the CRC32C checksum are written in Python, the optional `adiskreader_native` module (Rust) has the same ones much faster (about 50 times for the first three). The checksums of the Veeam backup files are verified only when the module is installed, unless asked for.
 It is used when it is installed, nothing else needs to be changed:  
 `pip install ./native/adiskreader_native` (needs a Rust toolchain)  
 Setting `ADISKREADER_NO_NATIVE=1` turns it off.
