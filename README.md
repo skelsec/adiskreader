@@ -16,16 +16,19 @@ Check out the community version at [OctoPwn - Live](https://live.octopwn.com/)
 # Description
 *The project is still in developement, expect issues*
 
-This is a library with a simple API to read (only read) and recover files from disk images (vhdx) or raw disks/partitions obtained by `dd` or similar command. Opening a file on the disk image provides an async fileobject so you can perform file operations like `read` `seek` `tell` without extracting the entire file.  
-It comes with an example console client to demonstrate the core features.
+This is a library with a simple API to read (only read) and recover files from disk images of virtual machines (VHD, VHDX, VMDK, QCOW2, VDI), raw disks/partitions obtained by `dd` or similar command, Windows images (WIM, ESD), optical disc images (ISO) and Veeam backups. Opening a file on the disk image provides an async fileobject so you can perform file operations like `read` `seek` `tell` without extracting the entire file.  
+The image does not need to be on your machine: it is read in parts over SMB or SSH as well, only the blocks needed are fetched.  
+Everything is written in Python, without the tools or libraries of the vendors and without mounting anything. It comes with an example console client to demonstrate the core features.
 
 # Features
 
 ## Datasource
 
-| File | Gzip | SMB | SSH(SFTP) |   |
-|------|------|-----|-----------|---|
-| ✔️    | ✔️    | ✔️   | ✔️         |   |
+| File | Gzip | SMB | SSH(SFTP) | File inside another image |
+|------|------|-----|-----------|---------------------------|
+| ✔️    | ✔️    | ✔️   | ✔️         | ✔️                         |
+
+Disks made of several files (snapshots, differencing disks, split extents, backup chains) find their other files next to the one opened, on all of the datasources.
 
 ## Disk
 
@@ -33,7 +36,11 @@ It comes with an example console client to demonstrate the core features.
 |-----|-----|------|------|-------|-----|
 | ✔️   | ✔️   | ✔️    | ✔️    | ✔️     | ✔️   |
 
+The type of the disk is taken from the URL scheme or the extension of the file, then from the signature in the file.  
 Differencing VHD / VHDX disks, VMDK snapshots and QCOW2 disks with backing files are read together with their parents.  
+VHD: fixed, dynamic and differencing disks.  
+VHDX: fixed, dynamic and differencing disks. A disk which was not closed cleanly (copied from a running machine, for example) has a log, it is replayed in memory when the disk is opened, the file is not modified.  
+VMDK: descriptor files with any number of flat, sparse or zero extents, monolithic and split disks, stream optimized disks (OVA exports), and the snapshot formats of ESXi (vmfsSparse, seSparse).  
 QCOW2: version 2 and 3, compressed clusters, extended L2 entries, external data files. The snapshots stored in the disk are opened with `open_snapshot`. Encrypted disks are not supported.  
 VDI: the differencing disks do not store the path of their parent, open the files of the chain with `VDIDisk.from_chain`.  
 Disk images stored inside another image can be opened with `FSFileSource`.
@@ -79,13 +86,15 @@ An image usually describes its files with more than one of these, each of them c
 | ✔️     | ✔️     | ✔️     | ✔️    | ✔️    | ❌    | ❌     |
 
 # Install
-`git clone` and `pip install .` should do the trick.  
-After install use the `adiskreader-console` executable for the sample client
+Python 3.10 or newer is needed. `git clone` and `pip install .` should do the trick.  
+After install use the `adiskreader-console` executable for the sample client.  
+The optional [native decompressors](#native-decompressors) make reading the compressed formats (WIM, ESD, Veeam backups) much faster.
 
 # Usage
 
 ## `adiskreader-console`
-Interactive sample client that tries to automatically "mount" the disk image specified by the source URL like:
+Interactive sample client that tries to automatically "mount" the disk image specified by the source URL.  
+The type of the image is detected, it can be given in the scheme of the URL as well (`+raw`, `+vhd`, `+vhdx`, `+vmdk`, `+qcow2`, `+vdi`).
 
 ### Parsing a VHDX file over SMB
 `adiskreader-console smb+ntlm-password://TEST\victim@10.10.10.2/sharename/foldername/disk.vhdx`  
@@ -118,10 +127,55 @@ It is used when it is installed, nothing else needs to be changed:
 Setting `ADISKREADER_NO_NATIVE=1` turns it off.
 
 ## Using the API
-At the moment there is no documentation, so you'll have to rely on the code itself :(
+At the moment there is no documentation, so you'll have to rely on the code itself :(  
+The console client (`adiskreader/examples/console.py`) and the tests show most of it. The short version:
+
+```python
+import asyncio
+from adiskreader.datasource import DataSource
+from adiskreader.disks import Disk
+
+async def main():
+    ds = await DataSource.from_url('file:///home/user/images/test.vhdx')
+    disk = await Disk.from_datasource(ds)
+    partitions = await disk.list_partitions()
+    fs = await partitions[0].mount()
+
+    async for root, dirs, files in fs.walk():
+        print(root, dirs, files)
+
+    file = await fs.open('Windows\\System32\\config\\SAM')
+    await file.seek(0, 0)
+    data = await file.read(4096)
+
+asyncio.run(main())
+```
+
+WIM files, ISO images and Veeam backups are opened with their own classes, the rest is the same:
+
+```python
+from adiskreader.filesystems.wim import WIM
+from adiskreader.filesystems.iso import ISOImage
+from adiskreader.backups.vbk import VBK
+
+backup = await VBK.from_datasource(ds) # ds is the vbm file, or a vbk file
+partitions = await backup.list_partitions()
+```
+
+A disk image stored in a filesystem of another image is a datasource too:
+
+```python
+from adiskreader.datasource.fsfile import FSFileSource
+
+inner_ds = await FSFileSource.from_filesystem(fs, '\\backups\\disk.vhd')
+inner_disk = await Disk.from_datasource(inner_ds)
+```
 
 # Testing
-`python3 -m pytest tests`
+`pip install pytest pytest-asyncio` then `python3 -m pytest tests`
+
+The tests read test images with known contents: disks and archives made by Windows, qemu, VirtualBox, VMware and Veeam (the scripts making them are in `tests`), and compare what is read with what those tools read from them. Nothing is mounted and no root rights are needed. Some of the tests use `7z` and `qemu-img` when they are installed, the SMB and SSH tests need a server (`ADISKREADER_SMB_URL`, `ADISKREADER_SSH_URL`, see `tests/smb`).  
+They are run for every pull request (`.github/workflows/tests.yaml`), with and without the native module.
 
 The large test files are not kept in this repository: the tests download the ones they need (about 90 MB in total) from the releases of [adiskreader-testfiles](https://github.com/skelsec/adiskreader-testfiles) to `tests/testfiles` and check their SHA-256.  
 Set `ADISKREADER_TEST_OFFLINE=1` to skip the tests of the files which are not there instead of downloading them.
