@@ -2,10 +2,13 @@
 Tests of the NFS datasource. The server is nfs_server.py, started by the tests on a port of the loopback interface:
 it serves the testfiles folder. With ADISKREADER_NFS_URL set, the tests reading the images are run against that
 server as well: it must point to an exported directory holding the decompressed test images of the testfiles folder.
+The test_nfs_lab tests are run against the docker lab of anfs (the lab folder of https://github.com/skelsec/anfs),
+they are skipped when its servers are not running. The NFSv4 and the kerberos tests are there.
 """
 
 import pytest
 import os
+import socket
 from config import *
 from checks import *
 from nfs_server import NFSTestServer
@@ -15,6 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../'
 
 from adiskreader.datasource import DataSource
 from adiskreader.datasource.nfs import NFSFileSource
+from anfs.protocol.nfs3.common.factory import NFS3ConnectionFactory
 from adiskreader.disks import Disk
 from adiskreader.disks.raw import RAWDisk
 from adiskreader.disks.vhd import VHDDisk
@@ -158,7 +162,7 @@ async def test_nfs_export(list_exports):
 async def test_nfs_credential():
     filepath = get_image(VFAT_16_TEST_FILE_GZ)
     async with NFSTestServer(TESTFILES_FOLDER_PATH) as server:
-        for params, expected in [('', (0, 0)), ('?uid=1000&gid=100', (1000, 100)), ('?uid=1234', (1234, 0))]:
+        for params, expected in [('', (0, 0)), ('&uid=1000&gid=100', (1000, 100)), ('&uid=1234', (1234, 0))]:
             server.credentials.clear()
             ds = await NFSFileSource.from_url(server.url(filepath.name, params))
             try:
@@ -177,7 +181,7 @@ async def test_nfs_errors():
         with pytest.raises(Exception, match='Not a file'):
             await NFSFileSource.from_url(server.url(DIFF_FOLDER_NAME))
         with pytest.raises(Exception, match='could be mounted'):
-            await NFSFileSource.from_url('nfs://127.0.0.1:%s/other/%s' % (server.port, filepath.name))
+            await NFSFileSource.from_url('nfs://127.0.0.1:%s/other/%s?mountport=%s' % (server.port, filepath.name, server.port))
         with pytest.raises(Exception, match='No file in the url'):
             await NFSFileSource.from_url('nfs://127.0.0.1:%s/' % server.port)
 
@@ -311,3 +315,228 @@ async def test_nfs_symlink_sibling(tmp_path):
                     await ds.open_sibling('../../top.bin')
             finally:
                 await ds.close()
+
+# The lab of anfs: a Linux kernel server and NFS-Ganesha with the same files, and a KDC (realm ANFS.LAB).
+# The exports are /srv/exports/<name> for NFSv3 and /<name> in the namespace of NFSv4.
+LAB_SERVERS = {'knfsd': '172.30.111.10', 'ganesha': '172.30.111.11'}
+LAB_KDC = '172.30.111.5'
+LAB_USER = 'alice'
+LAB_PASSWORD = 'Passw0rd!'
+LAB_VERSIONS = ['3', '4.0', '4.1', '4.2']
+lab_reachable = {}
+
+def lab_address(name, port = 2049):
+    """The address of a server of the lab, the test is skipped when it is not running"""
+    address = LAB_SERVERS.get(name, name)
+    if (address, port) not in lab_reachable:
+        try:
+            socket.create_connection((address, port), timeout = 2).close()
+            lab_reachable[(address, port)] = True
+        except OSError:
+            lab_reachable[(address, port)] = False
+    if lab_reachable[(address, port)] is False:
+        pytest.skip('The lab server %s (%s) is not running' % (name, address))
+    return address
+
+def lab_url(name, version, path, export = 'rw', params = ''):
+    root = '/srv/exports/' if version == '3' else '/'
+    return 'nfs://%s%s%s/%s?version=%s%s' % (lab_address(name), root, export, path, version, params)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('version', LAB_VERSIONS)
+@pytest.mark.parametrize('name', LAB_SERVERS)
+async def test_nfs_lab_read(name, version):
+    # big.bin is 3MiB of 'A'
+    ds = await NFSFileSource.from_url(lab_url(name, version, 'big.bin'))
+    try:
+        assert await ds.read(3*1024*1024 + 100) == b'A' * (3*1024*1024)
+        await ds.seek(-100, 2)
+        assert await ds.read(4096) == b'A' * 100
+        await ds.seek(1024*1024 - 10, 0)
+        assert await ds.read(20) == b'A' * 20
+        assert await ds.tell() == 1024*1024 + 10
+
+        for sibling_name, expected in [('hello.txt', b'hello from rw\n'), ('dir1\\dir2\\dir3\\deep.txt', b'nested\n'), ('link_to_hello', b'hello from rw\n')]:
+            sibling = await ds.open_sibling(sibling_name)
+            try:
+                assert await sibling.read(100) == expected
+            finally:
+                await sibling.close()
+        # the connection is still there
+        await ds.seek(0, 0)
+        assert await ds.read(10) == b'A' * 10
+    finally:
+        await ds.close()
+
+    for path, expected in [('link_to_hello', b'hello from rw\n'), ('dir1/dir2/dir3/deep.txt', b'nested\n'), ('dir1/../file with space.txt', b'with space\n'),
+                           ('árvíztűrő tükörfúrógép.txt', b'unicode\n'), ('empty.txt', b'')]:
+        ds = await NFSFileSource.from_url(lab_url(name, version, path))
+        try:
+            assert await ds.read(100) == expected
+        finally:
+            await ds.close()
+
+    with pytest.raises(FileNotFoundError):
+        await NFSFileSource.from_url(lab_url(name, version, 'doesnotexist.img'))
+    with pytest.raises(Exception, match='Not a file'):
+        await NFSFileSource.from_url(lab_url(name, version, 'dir1'))
+    # link_abs points to /etc/passwd: outside of the export, and not in the namespace of the NFSv4 servers
+    with pytest.raises(Exception, match='outside of the export' if version == '3' else 'not found'):
+        await NFSFileSource.from_url(lab_url(name, version, 'link_abs'))
+
+@pytest.mark.asyncio
+async def test_nfs_lab_other_export():
+    # NFSv4: every export is in the namespace, the files of the other ones can be opened as siblings
+    ds = await NFSFileSource.from_url(lab_url('knfsd', '4.2', 'hello.txt'))
+    try:
+        sibling = await ds.open_sibling('..\\ro\\hello.txt')
+        try:
+            assert await sibling.read(100) == b'hello from ro\n'
+        finally:
+            await sibling.close()
+        with pytest.raises(Exception, match='outside of the export'):
+            await ds.open_sibling('..\\..\\rw\\hello.txt')
+    finally:
+        await ds.close()
+    # NFSv3: the other export would have to be mounted for it
+    ds = await NFSFileSource.from_url(lab_url('knfsd', '3', 'hello.txt'))
+    try:
+        with pytest.raises(Exception, match='outside of the export'):
+            await ds.open_sibling('..\\ro\\hello.txt')
+    finally:
+        await ds.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', LAB_SERVERS)
+async def test_nfs_lab_user(name):
+    # user1000 is a directory of the uid 1000 with the mode 0700, the root user of the client is squashed in the ro export
+    for version in LAB_VERSIONS:
+        ds = await NFSFileSource.from_url(lab_url(name, version, 'user1000/mine.txt', 'ro', '&uid=1000&gid=1000'))
+        try:
+            assert await ds.read(100) == b'user 1000 only\n'
+        finally:
+            await ds.close()
+        with pytest.raises(Exception, match='ACCES'):
+            await NFSFileSource.from_url(lab_url(name, version, 'user1000/mine.txt', 'ro'))
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('sec', ['krb5', 'krb5i', 'krb5p'])
+@pytest.mark.parametrize('version', LAB_VERSIONS)
+@pytest.mark.parametrize('name', LAB_SERVERS)
+async def test_nfs_lab_kerberos(name, version, sec):
+    # the krb5 export takes kerberos only, alice is the uid 1000 on the servers
+    lab_address(LAB_KDC, 88)
+    params = '&dc=%s&spn=nfs/%s.anfs.lab&sec=%s' % (LAB_KDC, name, sec)
+    url = lab_url(name, version, 'user1000/mine.txt', 'krb5', params)
+    url = url.replace('nfs://', 'nfs+kerberos-password://ANFS.LAB\\%s:%s@' % (LAB_USER, LAB_PASSWORD))
+    ds = await NFSFileSource.from_url(url)
+    try:
+        assert await ds.read(100) == b'user 1000 only\n'
+        sibling = await ds.open_sibling('..\\big.bin')
+        try:
+            assert await sibling.read(4*1024*1024) == b'A' * (3*1024*1024)
+        finally:
+            await sibling.close()
+        with pytest.raises(Exception, match='ACCES'):
+            await ds.open_sibling('..\\private\\rootonly.txt')
+    finally:
+        await ds.close()
+    with pytest.raises(Exception):
+        await NFSFileSource.from_url(lab_url(name, version, 'user1000/mine.txt', 'krb5', '&uid=1000&gid=1000'))
+
+async def lab_upload(address, files, links):
+    """Uploads the files to a new directory of the scratch directory of the rw export, returns the name of it and the function removing it"""
+    factory = NFS3ConnectionFactory.from_url('nfs://%s/' % address)
+    mount = factory.get_mount()
+    _, err = await mount.connect()
+    assert err is None, err
+    handle, err = await mount.mount('/srv/exports/rw')
+    assert err is None, err
+    await mount.disconnect()
+    client = factory.get_client(handle)
+    _, err = await client.connect()
+    assert err is None, err
+
+    dirname = 'adiskreader_%s' % os.urandom(4).hex()
+    created = []
+    async def makedirs(parts):
+        handle = 0
+        for i, part in enumerate(parts):
+            entry, err = await client.lookup(handle, part)
+            if entry is False:
+                entry, err = await client.mkdir(handle, part)
+                assert err is None, err
+                created.append((handle, part, True))
+            handle = entry.handle
+        return handle
+
+    async def cleanup():
+        for handle, name, is_dir in reversed(created):
+            if is_dir is True:
+                await client.rmdir(handle, name)
+            else:
+                await client.remove(handle, name)
+        await client.disconnect()
+
+    try:
+        for path, local_path in files.items():
+            parts = ['scratch', dirname] + path.split('/')
+            handle = await makedirs(parts[:-1])
+            _, err = await client.upload_file(handle, parts[-1], str(local_path))
+            assert err is None, err
+            created.append((handle, parts[-1], False))
+        for path, target in links.items():
+            parts = ['scratch', dirname] + path.split('/')
+            handle = await makedirs(parts[:-1])
+            _, err = await client.symlink(handle, parts[-1], target)
+            assert err is None, err
+            created.append((handle, parts[-1], False))
+    except BaseException:
+        await cleanup()
+        raise
+    return 'scratch/' + dirname, cleanup
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', LAB_SERVERS)
+async def test_nfs_lab_disks(name):
+    # disk images uploaded to the server: a filesystem is read from one, the parents of a differencing disk are opened next to it
+    ntfs_path = get_image(NTFS_TEST_FILE_VHDX_DYNAMIC_GZ)
+    diff_path, _ = get_diff_image('vhd_sub')
+    diff_expected = get_diff_expected('vhd_sub')
+    diff_folder = diff_path.parent.parent
+    files = {ntfs_path.name: ntfs_path, 'diff/sub/' + diff_path.name: diff_path}
+    for parent in ['diff_vhd_base.vhd', 'diff_vhd_child1.vhd', 'diff_vhd_child2.vhd']:
+        files['diff/' + parent] = diff_folder.joinpath(parent)
+    links = {'ntfs_link.vhdx': ntfs_path.name, 'diff_link.vhd': 'diff/sub/' + diff_path.name}
+
+    folder, cleanup = await lab_upload(lab_address(name), files, links)
+    try:
+        for version in LAB_VERSIONS:
+            for path in [ntfs_path.name, 'ntfs_link.vhdx']:
+                ds = await DataSource.from_url(lab_url(name, version, '%s/%s' % (folder, path)))
+                try:
+                    assert isinstance(ds, NFSFileSource)
+                    disk = await Disk.from_datasource(ds)
+                    assert isinstance(disk, VHDXDisk)
+                    partitions = await disk.list_partitions()
+                    fs = await NTFS.from_partition(partitions[0])
+                    manifest = load_manifest('ntfs')
+                    await check_file_list(fs, manifest)
+                    await check_file_fullread(fs, manifest)
+                finally:
+                    await ds.close()
+
+            for path in ['diff/sub/' + diff_path.name, 'diff_link.vhd']:
+                ds = await DataSource.from_url(lab_url(name, version, '%s/%s' % (folder, path)))
+                try:
+                    disk = await Disk.from_datasource(ds)
+                    assert isinstance(disk, VHDDisk)
+                    try:
+                        for lba in range(0, disk.capacity, 4096):
+                            assert await disk.read_sectors(lba, 4096) == diff_expected[lba*512:(lba+4096)*512]
+                    finally:
+                        await disk.close()
+                finally:
+                    await ds.close()
+    finally:
+        await cleanup()

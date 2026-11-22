@@ -1,32 +1,41 @@
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, unquote
 from adiskreader.datasource import DataSource, sibling_parts, sibling_url
 from anfs.protocol.nfs3.common.factory import NFS3ConnectionFactory
-from anfs.protocol.rpc.messages import AUTH_SYS
 
-# NF3REG, NF3DIR and NF3LNK of the ftype3 of NFSv3
+# NF3REG, NF3DIR and NF3LNK of the ftype3 of NFSv3, the nfs_ftype4 of NFSv4 has the same values
 NFS_TYPE_FILE = 1
 NFS_TYPE_DIR = 2
 NFS_TYPE_SYMLINK = 5
 # symbolic links followed for one file, as Linux does
 NFS_MAX_LINKS = 40
+# NFS3ERR_NOENT and NFS4ERR_NOENT
+NFS_ERR_NOENT = 2
 # the server returns less when it does not support this much in one READ
 NFS_READ_SIZE = 1024*1024
+# parts of the url scheme which are for the disk and not for the connection
+DISK_SCHEMES = ['RAW', 'VHD', 'VHDX', 'VMDK', 'QCOW2', 'VDI']
 
 class NFSFileSource(DataSource):
     """
-    A DataSource that reads from a remote file over the NFSv3 protocol.
+    A DataSource that reads from a remote file over the NFSv3 or the NFSv4 protocol.
     nfs://server/export/dir/file: the export is found by the datasource, it is the longest one the path starts with.
     Symbolic links are followed when they stay inside of the export.
-    The uid and gid sent to the server (AUTH_SYS, 0 by default) can be set with the uid=<int> and gid=<int> url parameters.
+    version=4|4.0|4.1|4.2: NFSv4, the path is the one in the namespace of the server (no mount and no portmapper is used).
+    The files are read without opening them on the server.
+    The connection is made by anfs, the url takes its parameters:
+    uid=<int>, gid=<int>, gids=<int,int>: the user sent to the server (AUTH_SYS, 0 by default)
+    nfs+kerberos-password://REALM\\user:password@server/...?dc=<ip of the KDC>: kerberos (RPCSEC_GSS), sec=krb5|krb5i|krb5p
+    the port in the url is the one of the NFS service, mountport=<int> and portmapport=<int> are the ones of the other services
+    privport=1: connects from a port below 1024
     """
     def __init__(self, config):
         super().__init__(config)
         self.__factory = None
         self.__client = None
         self.__owns_client = False
-        # handles of the directories from the root of the export to the directory of the file
+        # handles of the directories from the root of the export (NFSv4: of the server) to the directory of the file
         self.__dir_handles = None
-        # parts of the path of the export, the absolute symbolic links are resolved with it
+        # parts of the path of the export, the absolute symbolic links are resolved with it (NFSv4: empty)
         self.__export = None
         self.__handle = None
         self.__size = None
@@ -75,7 +84,7 @@ class NFSFileSource(DataSource):
     async def lookup(self, dir_handles:list, parts:list):
         """
         Walks the parts from the directory, returns the handle and the attributes of the file and the handles of its directories.
-        The symbolic links are followed (NFSv3 leaves this to the client): for a link to a file the directories are the ones of the file.
+        The symbolic links are followed (NFS leaves this to the client): for a link to a file the directories are the ones of the file.
         """
         # the .. parts of the path are resolved here: the server would step out of the export
         names = []
@@ -101,7 +110,7 @@ class NFSFileSource(DataSource):
                 dir_handles.pop()
                 continue
             entry, err = await self.__client.lookup(dir_handles[-1], name)
-            if err is not None:
+            if err is not None and getattr(err, 'status', None) != NFS_ERR_NOENT:
                 raise err
             if entry is False:
                 raise FileNotFoundError('%s not found on the server (%s)' % (name, '/'.join(parts)))
@@ -142,20 +151,24 @@ class NFSFileSource(DataSource):
             parts = self.config['parts']
         elif self.config.get('url') is not None:
             url_e = urlparse(self.config['url'])
-            self.__factory = NFS3ConnectionFactory.from_url(self.config['url'])
-            query = parse_qs(url_e.query)
-            if 'uid' in query or 'gid' in query:
-                uid = int(query['uid'][0]) if 'uid' in query else 0
-                gid = int(query['gid'][0]) if 'gid' in query else 0
-                self.__factory.credential = AUTH_SYS(uid = uid, gid = gid, gids = [gid])
-
-            root_handle, self.__export, parts = await self.mount(unquote(url_e.path))
-            self.__client = self.__factory.get_client(root_handle)
+            # the type of the disk may be in the scheme, the rest of it describes the authentication
+            scheme = '+'.join([tag for tag in url_e.scheme.split('+') if tag.upper() not in DISK_SCHEMES])
+            self.__factory = NFS3ConnectionFactory.from_url(url_e._replace(scheme = scheme).geturl())
+            if self.__factory.is_v4() is True:
+                # no exports here: the server has one namespace, the path of the url is a path in it
+                parts = [part for part in unquote(url_e.path).split('/') if part != '']
+                if len(parts) == 0:
+                    raise Exception('No file in the url: %s' % self.config['url'])
+                self.__export = []
+                self.__client = self.__factory.get_client4()
+            else:
+                root_handle, self.__export, parts = await self.mount(unquote(url_e.path))
+                self.__client = self.__factory.get_client(root_handle)
             _, err = await self.__client.connect()
             if err is not None:
                 raise err
             self.__owns_client = True
-            # the root of the export is always the handle 0 of the client
+            # the root of the export (NFSv4: of the server) is always the handle 0 of the client
             dir_handles = [0]
         else:
             raise Exception('No client or url provided in config')
@@ -197,7 +210,7 @@ class NFSFileSource(DataSource):
             raise Exception('Invalid whence value')
 
     async def close(self):
-        # NFSv3 has no open files, there is nothing to close on the server
+        # the files are not opened on the server, there is nothing to close there
         if self.__owns_client is True:
             # only the connection created by this object is closed
             await self.__client.disconnect()

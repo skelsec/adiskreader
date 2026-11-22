@@ -3,10 +3,9 @@
 Ideas for later, in no particular order.
 
 ## Datasources
-- NFS: the datasource was tested with the server of the tests only (`tests/nfs_server.py`), run the tests against real servers (`ADISKREADER_NFS_URL`).
-- NFS: the MOUNT service must be on the port of the url when the url has one.
-- NFS: symbolic links pointing to another export of the server are not followed.
-- anfs imports `xdrlib`, which is not part of Python since 3.13: adiskreader installs the `standard-xdrlib` backport for it, anfs should not need it.
+- NFS: symbolic links pointing to another export of the server are not followed over NFSv3.
+- NFS: the files are read with the anonymous stateid over NFSv4, they are not opened: a server with mandatory locks or share reservations may refuse it.
+- NFS: the tests against real servers need the docker lab of anfs, the CI does not have it (the kernel server needs the `nfsd` module and a privileged container, NFS-Ganesha alone may do).
 
 ## Filesystems
 - ext4
