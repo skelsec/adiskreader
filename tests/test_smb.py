@@ -1,0 +1,158 @@
+"""
+Tests of the SMB datasource, skipped unless ADISKREADER_SMB_URL is set.
+ADISKREADER_SMB_URL must point to a share holding the decompressed test images of the testfiles folder.
+smb/start.sh starts a local samba container for this and prints the URL to use.
+"""
+
+import pytest
+import os
+from config import *
+from checks import *
+from vmdk_builder import build_test_disks
+
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+
+from adiskreader.datasource import DataSource
+from adiskreader.datasource.smb import SMBFileSource
+from adiskreader.disks import Disk
+from adiskreader.disks.raw import RAWDisk
+from adiskreader.disks.vhd import VHDDisk
+from adiskreader.disks.vhdx import VHDXDisk
+from adiskreader.disks.vmdk import VMDKDisk
+from adiskreader.filesystems.ntfs import NTFS
+
+SMB_URL = os.environ.get('ADISKREADER_SMB_URL')
+pytestmark = pytest.mark.skipif(SMB_URL is None, reason='ADISKREADER_SMB_URL is not set')
+
+IMAGES = [
+    pytest.param(NTFS_TEST_FILE_GZ, RAWDisk, id='raw'),
+    pytest.param(NTFS_TEST_FILE_VHDX_DYNAMIC_GZ, VHDXDisk, id='vhdx_dynamic'),
+    pytest.param(NTFS_TEST_FILE_VHDX_FIXED_GZ, VHDXDisk, id='vhdx_fixed'),
+    pytest.param(NTFS_TEST_FILE_VHDX_GZ, VHDXDisk, id='vhdx_log'),
+]
+
+def get_url(image):
+    # makes sure the decompressed image exists in the shared folder
+    filepath = get_image(image)
+    return SMB_URL.rstrip('/') + '/' + filepath.name
+
+
+@pytest.mark.asyncio
+async def test_smb_read_seek():
+    filepath = get_image(NTFS_TEST_FILE_GZ)
+    with open(filepath, 'rb') as f:
+        expected = f.read()
+
+    ds = await SMBFileSource.from_url(get_url(NTFS_TEST_FILE_GZ))
+    try:
+        # sequential reads continue where the previous one ended
+        assert await ds.tell() == 0
+        assert await ds.read(512) == expected[:512]
+        assert await ds.read(1000) == expected[512:1512]
+        assert await ds.tell() == 1512
+
+        await ds.seek(0x100000, 0)
+        assert await ds.read(4096) == expected[0x100000:0x101000]
+        await ds.seek(-4096, 1)
+        assert await ds.read(4096) == expected[0x100000:0x101000]
+        await ds.seek(-100, 2)
+        assert await ds.read(100) == expected[-100:]
+
+        # reads at the end of the file are truncated
+        await ds.seek(-100, 2)
+        assert await ds.read(4096) == expected[-100:]
+        assert await ds.tell() == len(expected)
+        assert await ds.read(4096) == b''
+
+        # larger than the max read size of the connection
+        await ds.seek(0, 0)
+        assert await ds.read(20*1024*1024) == expected[:20*1024*1024]
+    finally:
+        await ds.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('image, disktype', IMAGES)
+async def test_smb_ntfs(image, disktype):
+    # the disk type is detected from the extension in the url, like in the console
+    ds = await DataSource.from_url(get_url(image))
+    try:
+        assert isinstance(ds, SMBFileSource)
+        disk = await Disk.from_datasource(ds)
+        assert isinstance(disk, disktype)
+        partitions = await disk.list_partitions()
+        fs = await NTFS.from_partition(partitions[0])
+        manifest = load_manifest('ntfs')
+        await check_file_list(fs, manifest)
+        await check_file_stat(fs, manifest)
+        await check_file_fullread(fs, manifest)
+        await check_file_ops(fs, manifest)
+    finally:
+        await ds.close()
+
+@pytest.mark.asyncio
+async def test_smb_open_sibling():
+    filepath = get_image(NTFS_TEST_FILE_GZ)
+    get_image(VFAT_16_TEST_FILE_GZ)
+    ds = await SMBFileSource.from_url(get_url(VFAT_16_TEST_FILE_GZ))
+    try:
+        sibling = await ds.open_sibling(filepath.name)
+        try:
+            assert sibling.config['url'] == get_url(NTFS_TEST_FILE_GZ)
+            await check_sibling(ds, sibling, filepath)
+            # siblings can open siblings, the .. in the path is resolved by the datasource
+            sibling2 = await sibling.open_sibling('.\\sub\\..\\' + filepath.name)
+            try:
+                await check_sibling(sibling, sibling2, filepath)
+            finally:
+                await sibling2.close()
+        finally:
+            await sibling.close()
+        # closing the sibling keeps the connection open
+        assert len(await ds.read(512)) == 512
+        with pytest.raises(Exception):
+            await ds.open_sibling('doesnotexist.img')
+        with pytest.raises(Exception, match='outside of the share'):
+            await ds.open_sibling('..\\' + filepath.name)
+    finally:
+        await ds.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', ['snapshot2', 'cowd2', 'multi_zero', 'sesparse', 'stream_footer'])
+async def test_smb_vmdk(name):
+    # the extents and the parent disks are opened from the directory of the first file
+    filename, expected, _ = build_test_disks()[name]
+    ds = await DataSource.from_url(SMB_URL.rstrip('/') + '/' + filename)
+    try:
+        disk = await Disk.from_datasource(ds)
+        assert isinstance(disk, VMDKDisk)
+        try:
+            for lba in range(0, disk.capacity, 4096):
+                assert await disk.read_sectors(lba, 4096) == expected[lba*512:(lba+4096)*512]
+        finally:
+            await disk.close()
+        # the files opened by the disk are closed, the connection is still usable
+        await ds.seek(0, 0)
+        assert len(await ds.read(4)) == 4
+    finally:
+        await ds.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name, disktype', [('vhd_sub', VHDDisk), ('vhdx_sub', VHDXDisk), ('vhdxfixed_child2', VHDXDisk)])
+async def test_smb_vhd_diff(name, disktype):
+    # the parents are opened from the share, the ones of the sub images are one directory up
+    path, _ = get_diff_image(name)
+    expected = get_diff_expected(name)
+    ds = await DataSource.from_url(SMB_URL.rstrip('/') + '/' + path.relative_to(TESTFILES_FOLDER_PATH).as_posix())
+    try:
+        disk = await Disk.from_datasource(ds)
+        assert isinstance(disk, disktype)
+        try:
+            for lba in range(0, disk.capacity, 4096):
+                assert await disk.read_sectors(lba, 4096) == expected[lba*512:(lba+4096)*512]
+        finally:
+            await disk.close()
+        await ds.seek(0, 0)
+        assert len(await ds.read(4)) == 4
+    finally:
+        await ds.close()

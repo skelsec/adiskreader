@@ -118,7 +118,6 @@ class FatIO(): #io.RawIOBase
     async def close(self) -> None:
         """Close open file handles assuming lock handle."""
         await self.seek(0)
-        super().close()
 
     def readable(self) -> bool:
         """Determine whether or not the file is readable."""

@@ -1,0 +1,27 @@
+{
+	"dirs": [
+		"longdirname123456789abcdefghijklmn"
+	],
+	"files": {
+		"SAM": {
+			"size": 65536,
+			"sha256": "cf93167947a7eabb8a4a43d35b490a7ae7a666ef26501768e9ed70b151dab059"
+		},
+		"SECURITY": {
+			"size": 65536,
+			"sha256": "74d837fbf1639300d2094df2db49a044d494687b9005841bfb95e908e5da1463"
+		},
+		"SYSTEM": {
+			"size": 11010048,
+			"sha256": "6376e38c998d1a5ce0b48307b65ed55515a8fadd500390ef9ca6d23cee8b1671"
+		},
+		"longdirname123456789abcdefghijklmn\\test.txt": {
+			"size": 21,
+			"sha256": "cc4fafa4c90b4e4c08ade61acfa63add6a3fc31aa58d3f217eb199f557512e2a"
+		},
+		"longfilename1234567sdvkolrtiswvnne.txt": {
+			"size": 49,
+			"sha256": "d431df7665e403bf4a32331842f5bbb3c72e206049180df729ce48bc62cf7ef0"
+		}
+	}
+}

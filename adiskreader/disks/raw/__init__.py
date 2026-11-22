@@ -34,6 +34,14 @@ class RAWDisk(Disk):
         return await self.__stream.read(size)
 
 
+    async def read_sectors(self, sector:int, count:int):
+        """Reads consecutive sectors, the data is shorter if the end of the disk is reached"""
+        await self.__stream.seek(sector * self.__sector_size, 0)
+        return await self.__stream.read(count * self.__sector_size)
+
+    async def close(self):
+        pass
+
     async def read_LBA(self, lba:int):
         if lba in self.__lba_cache:
             return self.__lba_cache[lba]

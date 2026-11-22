@@ -37,9 +37,9 @@ setup(
 	description="",
 
 	# long_description=open("README.txt").read(),
-	python_requires='>=3.6',
+	python_requires='>=3.10',
 	classifiers=[
-		"Programming Language :: Python :: 3.6",
+		"Programming Language :: Python :: 3",
 		"License :: OSI Approved :: MIT License",
 		"Operating System :: OS Independent",
 	],
@@ -50,6 +50,7 @@ setup(
         'amurex>=0.0.4',
         'prompt-toolkit>=3.0.2',
 		'tqdm',
+		'zstandard',
 	],
     tests_require=[
         'pytest',

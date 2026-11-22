@@ -21,3 +21,18 @@ def round_up(x, y):
 
 def ceil_d(x, y):
     return (x + (y-1)) // y
+
+CRC32C_TABLE = []
+for _i in range(256):
+    _crc = _i
+    for _ in range(8):
+        _crc = (_crc >> 1) ^ 0x82F63B78 if _crc & 1 else _crc >> 1
+    CRC32C_TABLE.append(_crc)
+
+def crc32c(data:bytes, crc:int = 0):
+    """CRC-32C (Castagnoli), used by the VHDX format"""
+    crc ^= 0xFFFFFFFF
+    table = CRC32C_TABLE
+    for b in data:
+        crc = table[(crc ^ b) & 0xFF] ^ (crc >> 8)
+    return crc ^ 0xFFFFFFFF

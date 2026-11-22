@@ -15,6 +15,10 @@ class VHDType(enum.Enum):
     RESERVED2 = 5
     RESERVED3 = 6
 
+def vhd_checksum(data:bytes, offset:int):
+    """One's complement of the sum of the bytes, without the checksum field at the offset"""
+    return ~(sum(data) - sum(data[offset:offset+4])) & 0xFFFFFFFF
+
 class HardDiskFooter:
     def __init__(self):
         self.Cookie = None
@@ -33,6 +37,7 @@ class HardDiskFooter:
         self.UniqueId = None
         self.SavedState = None
         self.Padding = None
+        self.valid = None # cookie and checksum are correct
     
     @staticmethod
     def from_bytes(data:bytes):
@@ -40,6 +45,8 @@ class HardDiskFooter:
     
     @staticmethod
     def from_buffer(buffer:io.BytesIO):
+        raw = buffer.read(512)
+        buffer = io.BytesIO(raw)
         footer = HardDiskFooter()
         footer.Cookie = buffer.read(8)
         if footer.Cookie != b'conectix':
@@ -59,6 +66,7 @@ class HardDiskFooter:
         footer.UniqueId = buffer.read(16)
         footer.SavedState = int.from_bytes(buffer.read(1), byteorder='big')
         footer.Padding = buffer.read(427)
+        footer.valid = vhd_checksum(raw, 64) == footer.Checksum
         return footer
     
     def __str__(self):

@@ -1,0 +1,17 @@
+[package]
+name = "adiskreader_native"
+version = "0.1.0"
+edition = "2021"
+description = "Native decompressors (XPRESS, LZX, LZMS, LZ4) for adiskreader"
+license = "MIT"
+
+[lib]
+name = "adiskreader_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.26", features = ["extension-module", "abi3-py38"] }
+
+[profile.release]
+opt-level = 3
+lto = true

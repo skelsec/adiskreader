@@ -1,7 +1,7 @@
 import os
 import gzip
 from urllib.parse import urlparse, parse_qs
-from adiskreader.datasource import DataSource
+from adiskreader.datasource import DataSource, sibling_parts, sibling_url
 import shutil
 
 
@@ -48,6 +48,19 @@ class GzipFileSource(DataSource):
     
     async def tell(self):
         return self.__offset
+
+    async def open_sibling(self, name:str):
+        # the sibling is either compressed like this file (name.gz) or a regular file
+        parts = sibling_parts(name)
+        path = os.path.join(os.path.dirname(self.config['path']), *parts)
+        if os.path.exists(path + '.gz') is False:
+            from adiskreader.datasource.file import FileSource
+            return await FileSource.from_file(path)
+        parts[-1] += '.gz'
+        config = self.sibling_config(path = path + '.gz')
+        if 'url' in config:
+            config['url'] = sibling_url(config['url'], parts)
+        return await GzipFileSource.from_config(config)
     
     async def decompress(self, outpath:str):
         self.__stream.seek(0, 0)

@@ -1,6 +1,7 @@
 import io
 import uuid
 from typing import List, Dict, Tuple
+from adiskreader.utils import crc32c
 
 # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-vhdx/340e64a4-ae2a-4dc1-b19b-3dd9d57a3359
 
@@ -28,6 +29,13 @@ class Headers:
         headers.RegionTable2 = RegionTable.from_buffer(data)
         headers.Reserved = buff.read()
         return headers
+
+    def get_current_header(self):
+        """Returns the valid header with the highest sequence number"""
+        valid = [header for header in (self.Header1, self.Header2) if header.valid is True]
+        if len(valid) == 0:
+            raise Exception('No valid VHDX header found')
+        return max(valid, key=lambda header: header.SequenceNumber)
 
     def __str__(self) -> str:
         t = '== Headers ==\n'
@@ -78,37 +86,37 @@ class Header:
         self.Version = None
         self.LogLength = None
         self.LogOffset = None
-        self.LogSequenceNumber = None
-        self.LogChecksum = None
         self.Reserved = None
-    
+        self.valid = None # signature and checksum are correct
+
     @staticmethod
     def from_bytes(data:bytes):
         return Header.from_buffer(io.BytesIO(data))
-    
+
     @staticmethod
     def from_buffer(buff):
-        data = io.BytesIO(buff.read(64*1024)) # 64KB
+        raw = buff.read(64*1024) # 64KB
+        data = io.BytesIO(raw)
         header = Header()
-        header.Signature = data.read(8)
-        header.Checksum = data.read(4)
-        header.SequenceNumber = int.from_bytes(data.read(4), byteorder='little', signed=False)
+        header.Signature = data.read(4)
+        header.Checksum = int.from_bytes(data.read(4), byteorder='little', signed=False)
+        header.SequenceNumber = int.from_bytes(data.read(8), byteorder='little', signed=False)
         header.FileWriteGuid = uuid.UUID(bytes_le=data.read(16))
         header.DataWriteGuid = uuid.UUID(bytes_le=data.read(16))
         header.LogGuid = uuid.UUID(bytes_le=data.read(16))
-        header.LogVersion = int.from_bytes(data.read(4), byteorder='little', signed=False)
-        header.Version = int.from_bytes(data.read(4), byteorder='little', signed=False)
+        header.LogVersion = int.from_bytes(data.read(2), byteorder='little', signed=False)
+        header.Version = int.from_bytes(data.read(2), byteorder='little', signed=False)
         header.LogLength = int.from_bytes(data.read(4), byteorder='little', signed=False)
-        header.LogOffset = int.from_bytes(data.read(4), byteorder='little', signed=False)
-        header.LogSequenceNumber = int.from_bytes(data.read(8), byteorder='little', signed=False)
-        header.LogChecksum = data.read(4)
-        header.Reserved = data.read(416)
+        header.LogOffset = int.from_bytes(data.read(8), byteorder='little', signed=False)
+        header.Reserved = data.read(4016)
+        # the checksum covers the first 4KB with the checksum field zeroed
+        header.valid = header.Signature == b'head' and crc32c(raw[:4] + b'\x00'*4 + raw[8:4096]) == header.Checksum
         return header
 
     def __str__(self) -> str:
         t = '== Header ==\n'
         t += f'Signature: {self.Signature.hex()}\n'
-        t += f'Checksum: {self.Checksum.hex()}\n'
+        t += f'Checksum: {self.Checksum}\n'
         t += f'SequenceNumber: {self.SequenceNumber}\n'
         t += f'FileWriteGuid: {self.FileWriteGuid}\n'
         t += f'DataWriteGuid: {self.DataWriteGuid}\n'
@@ -117,9 +125,7 @@ class Header:
         t += f'Version: {self.Version}\n'
         t += f'LogLength: {self.LogLength}\n'
         t += f'LogOffset: {self.LogOffset}\n'
-        t += f'LogSequenceNumber: {self.LogSequenceNumber}\n'
-        t += f'LogChecksum: {self.LogChecksum.hex()}\n'
-        t += f'Reserved: {self.Reserved.hex()}'
+        t += f'Valid: {self.valid}'
         return t
     
 # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-vhdx/c562ffcd-6c63-421f-a28d-2ee812c94b08
@@ -228,6 +234,7 @@ class MetaDataRegion:
         self.ChunkRatio = None
         self.LeaveBlockAllocated = None
         self.HasParent = None
+        self.ParentLocator:ParentLocator = None
         self.lba_per_block = None
 
 
@@ -250,7 +257,7 @@ class MetaDataRegion:
                         VHDX_KNOWN_METADATA_ITEMS[str(tableentry.ItemId).upper()].from_bytes(idata))
                     )
             else:
-                region.items.append('UNKNOWN', idata)
+                region.items.append(('UNKNOWN', idata))
         
         for itype, item in region.items:
             if isinstance(item, FileParameters):
@@ -265,6 +272,8 @@ class MetaDataRegion:
                 region.PhysicalSectorSize = item.PhysicalSectorSize
             elif isinstance(item, VirtualDiskId):
                 region.VirtualDiskId = item.VirtualDiskId
+            elif isinstance(item, ParentLocator):
+                region.ParentLocator = item
         
         VHDX_MAX_SECTORS_PER_BLOCK = 2**23
         region.ChunkRatio = (VHDX_MAX_SECTORS_PER_BLOCK * region.LogicalSectorSize) // region.BlockSize
@@ -362,9 +371,9 @@ class MetaDataTableEntry:
         
         entry.Reserved = buff.read(4)
         flagfield = entry.Reserved[0]
-        entry.isUser = bool(flagfield >> 3) #msb of reserved
-        entry.isVirtualDisk = bool( (flagfield >> 2) & 1) #2nd msb of reserved
-        entry.isRequired = bool( (flagfield >> 1) & 1)
+        entry.isUser = bool(flagfield & 1)
+        entry.isVirtualDisk = bool( (flagfield >> 1) & 1)
+        entry.isRequired = bool( (flagfield >> 2) & 1)
         entry.Reserved2 = buff.read(4)
         return entry
     
@@ -398,8 +407,8 @@ class FileParameters:
         file_parameters.BlockSize = int.from_bytes(buff.read(4), byteorder='little', signed=False)
         file_parameters.Reserved = buff.read(4)
         flagfield = file_parameters.Reserved[0]
-        file_parameters.LeaveBlockAllocated = bool(flagfield >> 7)
-        file_parameters.HasParent = bool((flagfield >> 6) & 1)
+        file_parameters.LeaveBlockAllocated = bool(flagfield & 1)
+        file_parameters.HasParent = bool((flagfield >> 1) & 1)
         return file_parameters
 
     def __str__(self) -> str:
@@ -491,9 +500,9 @@ class ParentLocator:
         self.LocatorType = None
         self.Reserved = None
         self.KeyValueCount = None
-        self.Entries = []
+        self.entries = []
 
-        self.kv = {}
+        self.kv = {} # parent_linkage, parent_linkage2, relative_path, volume_path, absolute_win32_path
 
     @staticmethod
     def from_bytes(data:bytes):
@@ -501,6 +510,8 @@ class ParentLocator:
     
     @staticmethod
     def from_buffer(buff):
+        # the offsets of the keys and values are relative to the start of the locator
+        buff = io.BytesIO(buff.read())
         parent_locator = ParentLocator()
         parent_locator.LocatorType = uuid.UUID(bytes_le=buff.read(16))
         parent_locator.Reserved = buff.read(2)
@@ -517,11 +528,7 @@ class ParentLocator:
 
     def __str__(self) -> str:
         t = '== ParentLocator ==\n'
-        t += f'PlatformCode: {self.PlatformCode.hex()}\n'
-        t += f'PlatformDataSpace: {self.PlatformDataSpace}\n'
-        t += f'PlatformDataLength: {self.PlatformDataLength}\n'
-        t += f'Reserved: {self.Reserved.hex()}\n'
-        t += f'PlatformData: {self.PlatformData.hex()}'
+        t += f'LocatorType: {self.LocatorType}\n'
         for key in self.kv:
             t += f'  {key}: {self.kv[key]}\n'
         return t

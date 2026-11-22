@@ -62,3 +62,84 @@ sudo mount ${LOOPMOUNT}p1 ${mntdir}
 sudo umount ${mntdir}
 sudo losetup -d ${LOOPMOUNT}
 ```
+
+
+VHDX (converted from the raw NTFS image):
+```
+qemu-img convert -f raw -O vhdx -o subformat=dynamic ntfs_test.img ntfs_test_dynamic.vhdx
+qemu-img convert -f raw -O vhdx -o subformat=fixed ntfs_test.img ntfs_test_fixed.vhdx
+```
+
+VMDK:
+The vmdk images are converted from the raw ntfs image, the snapshots are written with qemu-io (the writes are listed in `config.py`):
+```
+qemu-img convert -f raw -O vmdk -o subformat=monolithicSparse ntfs_test.img ntfs_test_monolithicSparse.vmdk
+qemu-img convert -f raw -O vmdk -o subformat=streamOptimized ntfs_test.img ntfs_test_streamOptimized.vmdk
+qemu-img create -f vmdk -b ntfs_test_monolithicSparse.vmdk -F vmdk ntfs_test_snapshot.vmdk
+qemu-io -f vmdk -c "write -P 0xA5 0x200000 0x30000" -c "write -P 0x5A 0x2fffe00 0x1200" -c "write -P 0x77 0x10001 0x1ff" ntfs_test_snapshot.vmdk
+qemu-img create -f vmdk -b ntfs_test_snapshot.vmdk -F vmdk ntfs_test_snapshot2.vmdk
+qemu-io -f vmdk -c "write -P 0x11 0x210000 0x10000" -c "write -z 0x400000 0x100000" ntfs_test_snapshot2.vmdk
+```
+The `ntfs_test_vmware*` images are made by VMware Workstation, `t.vmx` is a minimal VM with `ntfs_test_vmware.vmdk` as its only disk:
+```
+vmware-vdiskmanager -r built_flat.vmdk -t 0 ntfs_test_vmware.vmdk
+vmrun -T ws snapshot t.vmx snap1    # creates ntfs_test_vmware-000001.vmdk, then the same qemu-io writes as above
+ovftool t.vmx t.ova                 # before the snapshot, ntfs_test_vmware_ova.vmdk is the disk in the ova
+```
+The disks qemu-img can not create (multiple extents, ESXi snapshots, stream optimized with footer) are built by `vmdk_builder.py` when the tests run.
+If qemu-img is installed, `test_vmdk.py` also checks that qemu reads the same data from them.
+
+Differencing VHD / VHDX:
+The chains (base, two children and one more child in a subdirectory, for dynamic and fixed bases) are made by Windows.
+Run `make_diff_vhd.ps1` in an elevated PowerShell on a Windows host and copy the zip it creates to `testfiles/adiskreader_diff_fixtures.zip`.
+The zip holds the disks, what Windows reads from each of them and a manifest; the tests extract it to `testfiles/diff` (about 820 MB).
+
+Disk images inside a filesystem:
+`nested_ntfs.img` holds two disks of the differencing chains, no root needed:
+```
+truncate -s 64M nested_ntfs.img
+mkntfs -F -Q -c 4096 -L nested nested_ntfs.img
+ntfscp nested_ntfs.img testfiles/diff/diff_vhd_base.vhd diff_vhd_base.vhd
+ntfscp nested_ntfs.img testfiles/diff/diff_vhd_child1.vhd diff_vhd_child1.vhd
+```
+
+WIM:
+`wim_test.wim` is made by 7z, which can only create WIM files without compression:
+```
+python wim_builder.py source /tmp/wimsrc
+(cd /tmp/wimsrc && 7z a -twim ../wim_test.wim .)
+gzip -9 wim_test.wim
+```
+The XPRESS, LZX and LZMS compressed versions are built from it by `wim_builder.py` when the tests run (7z reads them, `test_wim_7z` checks it),
+as well as the files with more images, named data streams, more parts and solid resources (ESD).
+WIM files made by Windows (DISM) are created by `make_wim.ps1`: run it in an elevated PowerShell on a Windows host and
+copy the zip it creates to `testfiles/adiskreader_wim_fixtures.zip`; `test_wim_windows.py` is skipped without it.
+
+ISO / UDF:
+The images are built by `iso_builder.py` when the tests run, nothing is stored. 7z reads the simpler ones, `test_iso_builder_7z` and `test_udf_builder_7z` check it;
+`test_iso_local_7z` compares against 7z on the disc images other software installed on the machine (VirtualBox, VMware), if there are any.
+Disc images made by Windows (IMAPI2) are created by `make_iso.ps1`: run it in PowerShell on a Windows host (no elevation needed) and
+copy the zip it creates to `testfiles/adiskreader_iso_fixtures.zip`; `test_iso_windows.py` is skipped without it.
+
+QCOW2 / VDI:
+The test disks are in `testfiles/adiskreader_qemu_fixtures.zip`, together with what qemu reads from each of them.
+To create them again (needs qemu-img, qemu-io and vbox-img of VirtualBox, no root):
+```
+python make_qemu_fixtures.py
+```
+
+MANIFESTS:
+The tests compare the images against the expected contents stored in `manifests/`.
+After changing an image, regenerate them (needs 7z, no root):
+```
+python make_manifest.py
+```
+
+SMB and SSH:
+`test_smb.py` and `test_ssh.py` are skipped unless `ADISKREADER_SMB_URL` / `ADISKREADER_SSH_URL` point to a share / directory holding the decompressed test images.
+To use a local samba and sshd container (needs docker, listens on 127.0.0.1:4445 and 127.0.0.1:2222 only):
+```
+eval "$(smb/start.sh)"
+pytest test_smb.py test_ssh.py
+docker stop adiskreader-smb
+```

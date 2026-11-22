@@ -1,0 +1,68 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: ${{ matrix.native && 'native' || 'python' }} / py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.13']
+        native: [false]
+        include:
+          - python-version: '3.13'
+            native: true
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: pip
+        cache-dependency-path: setup.py
+
+    # some of the tests compare against these tools, they are skipped without them
+    - name: Install 7z and qemu-img
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends p7zip-full qemu-utils
+
+    - name: Install adiskreader
+      run: |
+        python -m pip install --upgrade pip
+        pip install . pytest pytest-asyncio
+
+    - name: Install the native module
+      if: matrix.native
+      run: pip install ./native/adiskreader_native
+
+    # the large test files are downloaded by the tests (tests/config.py), their names and hashes are in that file
+    - name: Cache the downloaded test files
+      uses: actions/cache@v4
+      with:
+        path: |
+          tests/testfiles/*.zip
+          tests/testfiles/ntfs_test_*.gz
+        key: testfiles-${{ hashFiles('tests/config.py') }}
+
+    - name: Run the tests
+      env:
+        ADISKREADER_NO_NATIVE: ${{ matrix.native && '0' || '1' }}
+      run: python -m pytest tests -v -rs

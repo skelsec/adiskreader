@@ -1,0 +1,66 @@
+{
+	"dirs": [
+		"dir1",
+		"dir1\\sub",
+		"dir2",
+		"dir2\\emptydir"
+	],
+	"files": {
+		"chunk1.bin": {
+			"size": 32768,
+			"sha256": "b0cb0d220c4d8d534c2a5ec59cb5345efd003a71a7f6d8b4d910839b1da11a0f"
+		},
+		"chunk2.bin": {
+			"size": 65536,
+			"sha256": "4b13d873e06ea044277a1288d47b8d8928bcd0fe0c1ac944e4a7879d4d6600bb"
+		},
+		"dir1\\dup2.bin": {
+			"size": 40000,
+			"sha256": "63b11e7f96b8375e3424ad742cc306d6875d7bc94b1fd786d6d243c2b5e6cb12"
+		},
+		"dir1\\pattern_a.bin": {
+			"size": 163840,
+			"sha256": "17e9886a9b5849285fba3e0720ff3d7ceeb26650cafe6bd6291ac9c70e3921e6"
+		},
+		"dir1\\sub\\deep.txt": {
+			"size": 1000,
+			"sha256": "bd2b616ec5d77be205c8cdbb9588e1f9a228a02c98da85a5e6841154b19932da"
+		},
+		"dir2\\code.bin": {
+			"size": 100000,
+			"sha256": "477eff593a904b25e4a3341ecb80bc4944ca0ac85aa40b8ce0acb209d00c151a"
+		},
+		"dup1.bin": {
+			"size": 40000,
+			"sha256": "63b11e7f96b8375e3424ad742cc306d6875d7bc94b1fd786d6d243c2b5e6cb12"
+		},
+		"empty.txt": {
+			"size": 0,
+			"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+		},
+		"hello.txt": {
+			"size": 10,
+			"sha256": "ba23d62339eb816f48a5139899d1c0f9ad79b449d9df6cd6e2c9d7d903e88e3d"
+		},
+		"long name with spaces.txt": {
+			"size": 7,
+			"sha256": "e47fbedb2823cf1ae4d4cdb8273635be2024cb870588e259c9b23d76ae49d484"
+		},
+		"random.bin": {
+			"size": 70000,
+			"sha256": "25a61bf215d7158beb6112e3005048046755a3a9a3f9986b9b61f2d8bc7b1993"
+		},
+		"text.txt": {
+			"size": 160890,
+			"sha256": "93b5c8a517a6e52c510081e04287cbb405fe47e1c7fa60973cf44259248735b6"
+		},
+		"words.txt": {
+			"size": 186860,
+			"sha256": "8ad6fdfacb89623f35c5494dbf7da9a5d2dcbe5fba12ce4b051f8244ac8a7eb1"
+		},
+		"\u00e1rv\u00edzt\u0171r\u0151.txt": {
+			"size": 32,
+			"sha256": "ab51065bb7a2bce8d14cc871628174f0138be6cfc1d4a34d978c7a8f3a922de3"
+		}
+	}
+}
