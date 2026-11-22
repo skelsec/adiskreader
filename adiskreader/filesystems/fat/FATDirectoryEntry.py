@@ -44,6 +44,10 @@ class FATDirectoryEntry:
     ATTR_LONG_NAME_MASK = ATTR_READ_ONLY | ATTR_HIDDEN | ATTR_SYSTEM | \
         ATTR_VOLUME_ID | ATTR_DIRECTORY | ATTR_ARCHIVE
 
+    #: Bits set in DIR_NTRes if the base / the extension of the short name is lower case
+    NTRES_LOWER_BASE = 0x08
+    NTRES_LOWER_EXT = 0x10
+
     #: Directory entry header layout in struct formatted string
     FAT_DIRECTORY_LAYOUT = "<11sBBBHHHHHHHL"
     #: Size of a directory entry header in bytes
@@ -450,15 +454,9 @@ class FATDirectoryEntry:
         :raises: PyFATException: If entry cannot be found
         :returns: FATDirectoryEntry: Found entry
         """
-        dirs, files, _ = await self.get_entries()
-        for entry in dirs+files:
-            try:
-                if entry.get_long_name() == name:
-                    return entry
-            except NotAnLFNEntryException:
-                pass
-            if entry.get_short_name() == name:
-                return entry
+        entry = await self._find_entry(name)
+        if entry is not None:
+            return entry
 
         raise PyFATException(f'Cannot find entry {name}',
                              errno=errno.ENOENT)
@@ -522,7 +520,38 @@ class FATDirectoryEntry:
 
         :returns: str: Name of directory entry
         """
-        return self.name.get_unpadded_filename()
+        name = self.name.get_unpadded_filename()
+        if self.ntres & (self.NTRES_LOWER_BASE | self.NTRES_LOWER_EXT):
+            # Windows stores the names which are 8.3 conform in lower case with these flags instead of a long name
+            base, sep, ext = name.rpartition('.')
+            if sep == '':
+                base, ext = ext, ''
+            if self.ntres & self.NTRES_LOWER_BASE:
+                base = base.lower()
+            if self.ntres & self.NTRES_LOWER_EXT:
+                ext = ext.lower()
+            name = base + sep + ext
+        return name
+
+    async def _find_entry(self, name: str):
+        """Find the entry of the name in the current directory, the case of the name does not matter.
+
+        :returns: FATDirectoryEntry: Found entry, None if there is none
+        """
+        dirs, files, _ = await self.get_entries()
+        found = None
+        lname = name.lower()
+        for entry in dirs+files:
+            names = [entry.get_short_name()]
+            try:
+                names.append(entry.get_long_name())
+            except NotAnLFNEntryException:
+                pass
+            if name in names:
+                return entry
+            if found is None and lname in [n.lower() for n in names]:
+                found = entry
+        return found
 
     def get_long_name(self):
         """Get long name of directory entry.
@@ -538,16 +567,7 @@ class FATDirectoryEntry:
     
     async def get_child(self, name:str):
         """Returns a subdirectory or file in current directory"""
-        dirs, files, _ = await self.get_entries()
-        for entry in dirs+files:
-            try:
-                if entry.get_long_name() == name:
-                    return entry
-            except NotAnLFNEntryException:
-                pass
-            if entry.get_short_name() == name:
-                return entry
-        return None
+        return await self._find_entry(name)
     
     async def resolve_full_path(self):
         """Returns the full path of the current directory entry"""
@@ -570,7 +590,7 @@ class FATDirectoryEntry:
                 dirname = entry.get_short_name()
             yield 'dir', dirname, entry
         for entry in files:
-            fname = entry.get_short_name()
+            fname = entry.get_long_or_short_name()
             yield 'file', fname, entry
     
     async def get_parent(self):

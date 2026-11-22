@@ -4,6 +4,7 @@
 import zlib
 from typing import List
 from adiskreader import logger
+from adiskreader import compression
 from adiskreader.disks import Disk
 from adiskreader.disks.parent import open_parent_disk
 from adiskreader.datasource import DataSource
@@ -19,23 +20,8 @@ RUN_UNALLOCATED = 2  # the backing file, zeroes if there is none
 RUN_COMPRESSED = 3   # a compressed cluster, described by its L2 entry
 
 def get_zstd_decompressor():
-    """Returns a function decompressing one zstd frame, the modules which have it are optional"""
-    try:
-        from compression import zstd # python 3.14
-        return lambda data, size: zstd.ZstdDecompressor().decompress(data, size)
-    except ImportError:
-        pass
-    try:
-        import zstandard
-        return lambda data, size: zstandard.ZstdDecompressor().decompressobj().decompress(data)
-    except ImportError:
-        pass
-    try:
-        import pyzstd
-        return lambda data, size: pyzstd.ZstdDecompressor().decompress(data, size)
-    except ImportError:
-        pass
-    raise NotImplementedError('The disk is compressed with zstd, reading it needs python 3.14 or the zstandard module')
+    """Returns a function decompressing one zstd frame"""
+    return compression.get_zstd_decompressor()
 
 def inflate(data:bytes, size:int):
     # raw deflate stream, the bytes after its end belong to other clusters

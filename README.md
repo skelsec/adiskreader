@@ -34,7 +34,7 @@ It comes with an example console client to demonstrate the core features.
 | ✔️   | ✔️   | ✔️    | ✔️    | ✔️     | ✔️   |
 
 Differencing VHD / VHDX disks, VMDK snapshots and QCOW2 disks with backing files are read together with their parents.  
-QCOW2: version 2 and 3, compressed clusters (zstd needs python 3.14 or the `zstandard` module), extended L2 entries, external data files. The snapshots stored in the disk are opened with `open_snapshot`. Encrypted disks are not supported.  
+QCOW2: version 2 and 3, compressed clusters, extended L2 entries, external data files. The snapshots stored in the disk are opened with `open_snapshot`. Encrypted disks are not supported.  
 VDI: the differencing disks do not store the path of their parent, open the files of the chain with `VDIDisk.from_chain`.  
 Disk images stored inside another image can be opened with `FSFileSource`.
 
@@ -45,6 +45,17 @@ Disk images stored inside another image can be opened with `FSFileSource`.
 | ✔️                                     | ✔️               | ✔️                 |
 
 ESD: the solid resources are decompressed in chunks of up to 64 MB, reading a file needs the whole chunk it is stored in. Encrypted ESD files are not supported.
+
+## Backup
+
+| Veeam full backup (VBK) | Veeam incremental backup (VIB) | Veeam backup chain (VBM) |
+|-------------------------|--------------------------------|--------------------------|
+| ✔️                       | ✔️                              | ✔️                        |
+
+The disks of the backed up machines are read from the backup files of Veeam Backup & Replication, with all of its compression levels (none, dedupe-friendly, optimal, high, extreme) and block sizes.  
+An incremental backup needs the backups before it: open the `vbm` file stored next to them (`VBK.from_datasource`, the latest restore point by default) or give the files of the chain (`VBK.from_datasources`).  
+Tested with the backups of Hyper-V machines made by Veeam 13. Backups of other sources and of older versions (reverse incremental `vrb` files among them) were not tested.  
+Encrypted backups are not supported. `get_password_verifier` gives the data the password is checked with and the key derivation, in the format of hashcat mode 31200. The mode is PBKDF2-HMAC-SHA1 with 10000 iterations as older Veeam versions do it, Veeam 13 uses PBKDF2-HMAC-SHA256 with 600000 iterations.
 
 ## Optical disc image (iso)
 
@@ -89,6 +100,10 @@ Interactive sample client that tries to automatically "mount" the disk image spe
 `adiskreader-console file:///home/user/images/install.wim`  
 The images of the WIM file take the place of the partitions, `mount <index>` selects one.
 
+### Browsing a Veeam backup
+`adiskreader-console file:///home/user/backups/job/job.vbm`  
+The partitions of all the disks in the latest restore point are listed, `mount <index>` selects one. A `vbk` file can be opened on its own.
+
 ### Browsing an ISO file
 `adiskreader-console file:///home/user/images/install.iso`  
 The filesystems of the image (UDF, ISO9660 with Rock Ridge, Joliet) take the place of the partitions, the most descriptive one is mounted, `mount <index>` selects another.
@@ -97,7 +112,7 @@ The filesystems of the image (UDF, ISO9660 with Rock Ridge, Joliet) take the pla
 `adiskreader-console file+gz:///home/user/images/test.gz.raw`
 
 ## Native decompressors
-The XPRESS, LZX and LZMS decompressors are written in Python, the optional `adiskreader_native` module (Rust) has the same ones about 50 times faster.
+The XPRESS, LZX, LZMS, LZ4 and Veeam RLE decompressors and the CRC32C checksum are written in Python, the optional `adiskreader_native` module (Rust) has the same ones much faster (about 50 times for the first three). The checksums of the Veeam backup files are verified only when the module is installed, unless asked for.
 It is used when it is installed, nothing else needs to be changed:  
 `pip install ./native/adiskreader_native` (needs a Rust toolchain)  
 Setting `ADISKREADER_NO_NATIVE=1` turns it off.
@@ -106,7 +121,10 @@ Setting `ADISKREADER_NO_NATIVE=1` turns it off.
 At the moment there is no documentation, so you'll have to rely on the code itself :(
 
 # Testing
-tests require installing guestmount
+`python3 -m pytest tests`
+
+The large test files are not kept in this repository: the tests download the ones they need (about 90 MB in total) from the releases of [adiskreader-testfiles](https://github.com/skelsec/adiskreader-testfiles) to `tests/testfiles` and check their SHA-256.  
+Set `ADISKREADER_TEST_OFFLINE=1` to skip the tests of the files which are not there instead of downloading them.
 
 # Kudos
 

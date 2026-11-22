@@ -29,6 +29,32 @@ def with_native(name:str):
         return wrapper
     return decorator
 
+def get_zstd_decompressor():
+    """Returns a function decompressing one zstd frame: func(data, size of the result)"""
+    try:
+        from compression import zstd # python 3.14
+        return lambda data, size: zstd.ZstdDecompressor().decompress(data, size)
+    except ImportError:
+        pass
+    try:
+        import zstandard
+        return lambda data, size: zstandard.ZstdDecompressor().decompressobj().decompress(data)
+    except ImportError:
+        pass
+    try:
+        import pyzstd
+        return lambda data, size: pyzstd.ZstdDecompressor().decompress(data, size)
+    except ImportError:
+        pass
+    raise NotImplementedError('The data is compressed with zstd, reading it needs python 3.14 or the zstandard module')
+
+def crc32c(data:bytes):
+    """CRC-32C of the data, calculated by the native module when there is one"""
+    if native is not None and hasattr(native, 'crc32c'):
+        return native.crc32c(data)
+    from adiskreader.utils import crc32c as crc32c_py
+    return crc32c_py(data)
+
 class HuffmanDecoder:
     """
     Decoder of canonical Huffman codes read MSB first (XPRESS, LZX, LZMS).

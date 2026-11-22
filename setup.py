@@ -50,6 +50,7 @@ setup(
         'amurex>=0.0.4',
         'prompt-toolkit>=3.0.2',
 		'tqdm',
+		'zstandard',
 	],
     tests_require=[
         'pytest',

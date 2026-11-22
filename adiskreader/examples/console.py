@@ -20,6 +20,7 @@ from adiskreader.datasource import DataSource
 from adiskreader.disks import Disk
 from adiskreader.filesystems.wim import WIM
 from adiskreader.filesystems.iso import ISOImage
+from adiskreader.backups.vbk import VBK
 
 
 class DiskBrowser(aiocmd.PromptToolkitCmd):
@@ -130,6 +131,16 @@ class DiskBrowser(aiocmd.PromptToolkitCmd):
 				# the filesystems of the disc image (UDF, ISO9660, Joliet) are listed like the partitions, the first one is the best
 				self.__disk = await ISOImage.from_datasource(self.__datasource)
 				is_iso = True
+			elif await VBK.is_vbk(self.__datasource) is True:
+				# the partitions of all the disks stored in the Veeam backup are listed, a vbm file opens the latest restore point of its chain
+				self.__disk = await VBK.from_datasource(self.__datasource)
+				if self.__disk.encrypted is True:
+					verifier = await self.__disk.get_password_verifier()
+					print('The backup is encrypted, reading it is not supported.')
+					if verifier is not None:
+						print('The hash of its password (key derivation: %s, hashcat mode 31200 is PBKDF2-HMAC-SHA1-10000):' % verifier.kdf)
+						print(verifier)
+					return False, None
 			else:
 				self.__disk = await Disk.from_datasource(self.__datasource)
 			await self.do_partinfo(False)

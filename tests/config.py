@@ -1,9 +1,12 @@
 
 import pathlib
 import gzip
+import hashlib
 import json
+import os
 import shutil
 import zipfile
+import urllib.request
 
 
 VFAT_16_TEST_FILE_GZ = 'testfiles/vfat_16_test.img.gz'
@@ -50,6 +53,10 @@ DIFF_FOLDER_NAME = 'diff'
 WIM_FIXTURES_ZIP = 'testfiles/adiskreader_wim_fixtures.zip'
 WIM_FOLDER_NAME = 'wimwin'
 
+# backup files made by Veeam Backup & Replication 13 with make_vbk.ps1, with the contents of the disks at each run
+VBK_FIXTURES_ZIP = 'testfiles/vbk_fixtures.zip'
+VBK_FOLDER_NAME = 'vbk'
+
 # disc images made by IMAPI2 on Windows (make_iso.ps1)
 ISO_FIXTURES_ZIP = 'testfiles/adiskreader_iso_fixtures.zip'
 ISO_FOLDER_NAME = 'isowin'
@@ -70,6 +77,64 @@ MANIFESTS = {
 	'wim'     : WIM_TEST_FILE_GZ,
 }
 
+# the large test files are not kept in git, they are downloaded from here when a test needs them
+# set ADISKREADER_TEST_OFFLINE to skip the tests of the missing ones instead
+FIXTURES_URL = 'https://github.com/skelsec/adiskreader-testfiles/releases/download/v1/'
+# file name -> sha256
+FIXTURES_SHA256 = {
+	'adiskreader_diff_fixtures.zip'       : 'a522aca9e6cb50f037d982421f821b03f58eb1502987dfdd0da4d2fe5fa64bd6',
+	'adiskreader_iso_fixtures.zip'        : '60ad2d4c3b6bf1fd9b86b6dd76041b78018250195cc96a4f96eebbffd49f8e08',
+	'adiskreader_qemu_fixtures.zip'       : '14bfdf9afd2816f6a4134a472b60417d679d0122d30f862cbe3eddcf88fd9888',
+	'adiskreader_wim_fixtures.zip'        : '31647f4458f9130712c9d0f525df488484bc7ddaa1733484ecb997a2e2163208',
+	'vbk_fixtures.zip'                    : '872918794c4ed613a3660406dad4911b3d2a332e04cc611d1c51dd054574071b',
+	'ntfs_test_dynamic.vhdx.gz'           : '9223b3bdacbd5af719377afa15fb1db1860efca1a388afe490cd18e50511f4ef',
+	'ntfs_test_fixed.vhdx.gz'             : '326c07a59b2fc232d07ba5b15dc59924dc66ab3a2c685ebdfbcf82f1dce01040',
+	'ntfs_test_monolithicSparse.vmdk.gz'  : 'bc3f2a4956a6088d78bf2c4731ac66f7ab94d6ed49c70dd325abff171dfb8aac',
+	'ntfs_test_streamOptimized.vmdk.gz'   : '452c28286f85c1eb59567505f0da9cd2742f553e620f38b28e144b042cd3b2a3',
+	'ntfs_test_snapshot.vmdk.gz'          : '0a4d09f640604fee343290a2c3145231ef68b23ee2ef53521f2527d6575dc15b',
+	'ntfs_test_snapshot2.vmdk.gz'         : '8c8545287c4099bbbdc3b463eb7ff93bca9fa943d4ae3f7494aff37e5747423b',
+	'ntfs_test_vmware.vmdk.gz'            : '7d211fff6805fd650e23be6c9234ec1cf938ec81550ec788002786fd779d21bb',
+	'ntfs_test_vmware-000001.vmdk.gz'     : '66433d98bb35402b6c22296d3bfce3eb707dc7d604f4b91335296b30101dbcaf',
+	'ntfs_test_vmware_ova.vmdk.gz'        : '95bc45a1fe2fe09506ebbe753e454a82de659d97901c06ff7e35b26566f9504f',
+}
+
+def get_fixture(path):
+	"""
+	Returns the path of a test file (path is relative to the tests folder), downloading it when it is not kept in git.
+	The test is skipped when the file is not available.
+	"""
+	filepath = CURRENT_FILE_PATH.joinpath(path)
+	if filepath.exists():
+		return filepath
+	if filepath.name not in FIXTURES_SHA256:
+		raise FileNotFoundError(str(filepath))
+	import pytest
+	if os.environ.get('ADISKREADER_TEST_OFFLINE'):
+		pytest.skip('%s is not downloaded' % filepath.name, allow_module_level=True)
+	tmpfilepath = filepath.with_name(filepath.name + '.tmp')
+	sha256 = hashlib.sha256()
+	try:
+		with urllib.request.urlopen(FIXTURES_URL + filepath.name, timeout=60) as f_in:
+			with open(tmpfilepath, 'wb') as f_out:
+				while True:
+					data = f_in.read(0x100000)
+					if data == b'':
+						break
+					sha256.update(data)
+					f_out.write(data)
+	except OSError as e:
+		tmpfilepath.unlink(missing_ok=True)
+		pytest.skip('%s could not be downloaded: %s' % (filepath.name, e), allow_module_level=True)
+	if sha256.hexdigest() != FIXTURES_SHA256[filepath.name]:
+		tmpfilepath.unlink()
+		raise Exception('%s was downloaded with an unexpected sha256: %s' % (filepath.name, sha256.hexdigest()))
+	tmpfilepath.rename(filepath)
+	return filepath
+
+def has_fixture(path):
+	"""False when the test file is missing and is not to be downloaded"""
+	return CURRENT_FILE_PATH.joinpath(path).exists() or not os.environ.get('ADISKREADER_TEST_OFFLINE')
+
 def decompress_gzip(source_path:pathlib.Path, destination_file_name = None):
 	if destination_file_name is None:
 		destination_file_name = source_path.name.replace('.gz', '')
@@ -83,10 +148,12 @@ def decompress_gzip(source_path:pathlib.Path, destination_file_name = None):
 
 def get_image(image_gz, compressed = False):
 	"""Returns the path of the test image, either the gz file or the decompressed one"""
-	image_gz_path = CURRENT_FILE_PATH.joinpath(image_gz)
 	if compressed is True:
-		return image_gz_path
-	return decompress_gzip(image_gz_path)
+		return get_fixture(image_gz)
+	dstfilepath = TESTFILES_FOLDER_PATH.joinpath(pathlib.Path(image_gz).name.replace('.gz', ''))
+	if dstfilepath.exists():
+		return dstfilepath
+	return decompress_gzip(get_fixture(image_gz))
 
 def get_wim_image(compression = None):
 	"""Returns the path of the test wim file, compression is None, 'xpress', 'lzx' or 'lzms'"""
@@ -102,12 +169,12 @@ def get_wim_image(compression = None):
 	return dstfilepath
 
 def has_wim_fixtures():
-	return CURRENT_FILE_PATH.joinpath(WIM_FIXTURES_ZIP).exists()
+	return has_fixture(WIM_FIXTURES_ZIP)
 
 def get_wim_fixtures():
 	"""Extracts the WIM files made by Windows to testfiles/wimwin, returns the folder and the manifest"""
 	folder = TESTFILES_FOLDER_PATH.joinpath(WIM_FOLDER_NAME)
-	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(WIM_FIXTURES_ZIP)) as zf:
+	with zipfile.ZipFile(get_fixture(WIM_FIXTURES_ZIP)) as zf:
 		with zf.open('manifest.json') as f:
 			manifest = json.loads(f.read().decode('utf-8-sig'))
 		for wim in manifest['wims']:
@@ -123,13 +190,31 @@ def get_wim_fixtures():
 				tmpfilepath.rename(dstfilepath)
 	return folder, manifest
 
+def has_vbk_fixtures():
+	return has_fixture(VBK_FIXTURES_ZIP)
+
+def get_vbk_fixtures():
+	"""Extracts the Veeam backup files to testfiles/vbk, returns the folder and the manifest"""
+	folder = TESTFILES_FOLDER_PATH.joinpath(VBK_FOLDER_NAME)
+	zippath = get_fixture(VBK_FIXTURES_ZIP)
+	marker = folder.joinpath('extracted')
+	# the zip is extracted again when it is replaced
+	stamp = str(zippath.stat().st_mtime_ns)
+	if marker.exists() is False or marker.read_text() != stamp:
+		shutil.rmtree(folder, ignore_errors=True)
+		with zipfile.ZipFile(zippath) as zf:
+			zf.extractall(folder)
+		marker.write_text(stamp)
+	folder = folder.joinpath('vbk_fixtures')
+	return folder, json.loads(folder.joinpath('manifest.json').read_text(encoding='utf-8-sig'))
+
 def has_iso_fixtures():
-	return CURRENT_FILE_PATH.joinpath(ISO_FIXTURES_ZIP).exists()
+	return has_fixture(ISO_FIXTURES_ZIP)
 
 def get_iso_fixtures():
 	"""Extracts the disc images made by Windows to testfiles/isowin, returns the folder and the manifest"""
 	folder = TESTFILES_FOLDER_PATH.joinpath(ISO_FOLDER_NAME)
-	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(ISO_FIXTURES_ZIP)) as zf:
+	with zipfile.ZipFile(get_fixture(ISO_FIXTURES_ZIP)) as zf:
 		with zf.open('manifest.json') as f:
 			manifest = json.loads(f.read().decode('utf-8-sig'))
 		for image in manifest['images']:
@@ -147,7 +232,7 @@ def get_iso_fixtures():
 def get_qemu_fixtures():
 	"""Extracts the QCOW2 and VDI disks to testfiles/qemu, returns the folder and the images of the manifest by their names"""
 	folder = TESTFILES_FOLDER_PATH.joinpath(QEMU_FOLDER_NAME)
-	zippath = CURRENT_FILE_PATH.joinpath(QEMU_FIXTURES_ZIP)
+	zippath = get_fixture(QEMU_FIXTURES_ZIP)
 	marker = folder.joinpath('extracted')
 	with zipfile.ZipFile(zippath) as zf:
 		with zf.open('manifest.json') as f:
@@ -165,7 +250,7 @@ def get_qemu_fixtures():
 
 def get_qemu_expected(sha256):
 	"""Returns what qemu read from a disk"""
-	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(QEMU_FIXTURES_ZIP)) as zf:
+	with zipfile.ZipFile(get_fixture(QEMU_FIXTURES_ZIP)) as zf:
 		return zf.read('expected/%s.raw' % sha256)
 
 def get_diff_fixtures():
@@ -174,7 +259,7 @@ def get_diff_fixtures():
 	The disks are decompressed, their expected contents (image['raw']) are left gzipped.
 	"""
 	folder = TESTFILES_FOLDER_PATH.joinpath(DIFF_FOLDER_NAME)
-	with zipfile.ZipFile(CURRENT_FILE_PATH.joinpath(DIFF_FIXTURES_ZIP)) as zf:
+	with zipfile.ZipFile(get_fixture(DIFF_FIXTURES_ZIP)) as zf:
 		with zf.open('manifest.json') as f:
 			images = json.load(f)['images']
 		for info in zf.infolist():

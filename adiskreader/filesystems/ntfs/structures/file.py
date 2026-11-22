@@ -9,7 +9,9 @@ class NTFSFile:
         self.__dataruns = []
         self.__buffer = io.BytesIO()
         self.__buffer_total_len = 0
-        self.__real_size = None # the attribute header might not have the correct size
+        self.__real_size = None
+        self.__init_size = None
+        self.__data_runs = [] # (first cluster, cluster count) of all the runs of the file, sparse runs have 0 as their first cluster
         self.datastream = datastream
 
         self.__pos = 0
@@ -42,118 +44,49 @@ class NTFSFile:
         return self.__fr
 
     async def read_runs(self, size):
+        """Reads size bytes from the current position, the caller keeps it inside of the file"""
+        start = self.__pos
+        end = start + size
+        cluster_size = self.__fs.cluster_size
         buff = io.BytesIO()
-        runs = []
-        runmap = []
-        target_range = range(self.__pos, self.__pos + size)
-        start_offset_cluster = None
-        start_offset_pos = None
-        stop_offset_cluster = None
-        stop_offset_pos = None
-        start_idx = None
-        stop_idx = None
-        total_len_ctr = 0
         for r, index in self.__dataruns:
-            if start_idx is not None and stop_idx is not None:
-                break
-
-            if target_range.start >= r.stop:
-                total_len_ctr += len(r)
+            if r.stop <= start:
                 continue
-            
-            if target_range.start in r:
-                start_offset_cluster = math.floor((target_range.start - r.start) // self.__fs.cluster_size)
-                start_offset_pos = target_range.start - (r.start + (start_offset_cluster * self.__fs.cluster_size))
-                start_idx = index
-            
-            if target_range.stop in r:
-                stop_offset_cluster = math.ceil((r.stop - target_range.stop) // self.__fs.cluster_size)
-                stop_offset_pos = target_range.stop - (stop_offset_cluster * self.__fs.cluster_size)
-                if stop_offset_pos == 0:
-                    stop_offset_pos = None
-                stop_idx = index
-        
-        if self.__dataruns[-1][0].stop == target_range.stop:
-            stop_offset_cluster = 0
-            stop_offset_pos = target_range.stop - (stop_offset_cluster * self.__fs.cluster_size)
-            if stop_offset_pos == 0:
-                stop_offset_pos = None
-            stop_idx = len(self.__dataruns) - 1
-        
-        if stop_idx is None:
-            stop_idx = len(self.__dataruns) - 1
-            stop_offset_cluster = 0
-            stop_offset_pos = target_range.stop - (stop_offset_cluster * self.__fs.cluster_size)
-            if stop_offset_pos == 0:
-                stop_offset_pos = None
-        #print('runs: %s' % self.__dataattr.header.data_runs)
-        #print('start_offset_pos: %s' % start_offset_pos)
-        #print('start_offset_cluster: %s' % start_offset_cluster)
-        #print('stop_offset_pos: %s' % stop_offset_pos)
-        #print('stop_offset_cluster: %s' % stop_offset_cluster)
-        #print('start_idx: %s' % start_idx)
-        #print('stop_idx: %s' % stop_idx)
-        #input()
-
-        if start_idx is None or stop_idx is None:
-            raise FileNotFoundError
-
-        if start_idx == stop_idx:
-            run_offset, run_len = self.__dataattr.header.data_runs[start_idx]
-            runmap.append((run_offset + start_offset_cluster, run_len - start_offset_cluster))
-        
-        else:
-            # start run needs to be offset
-            start_run_offset, start_run_len = self.__dataattr.header.data_runs[start_idx]
-            if start_run_offset == 0:
-                runmap.append((0, start_run_len-(start_offset_pos)))
-            else:
-                runmap.append((start_run_offset + start_offset_cluster, start_run_len-start_offset_cluster))
-            
-            # middle runs don't need to be offset
-            for i in range(start_idx+1, stop_idx):
-                run_offset, run_length = self.__dataattr.header.data_runs[i]
-                runmap.append((run_offset, run_length))
-
-            # end run needs to be offset
-            end_run_offset, end_run_len = self.__dataattr.header.data_runs[stop_idx]
-            if end_run_offset == 0:
-                runmap.append((0, stop_offset_pos))
-            else:
-                runmap.append((end_run_offset, end_run_len - stop_offset_cluster))
-
-        #print('StartIdx: %s' % start_idx)
-        #print('StopIdx: %s' % stop_idx)
-        #print('Data run raw: %s' % [x.hex() for x in self.__dataattr.header.data_run_raw])
-        #print('Original runmap: %s' % self.__dataattr.header.data_runs)
-        #input('RunMap: %s' % runmap)
-        
-        for run_offset, run_length in runmap:
-            if run_offset == 0:
-                data = b'\x00' * (run_length * self.__fs.cluster_size)
+            if r.start >= end:
+                break
+            run_offset, _ = self.__data_runs[index]
+            # the part of the run which is needed, and which has data: the file is zeroes after its initialized size
+            first = max(start, r.start)
+            last = min(end, r.stop)
+            data_last = min(last, self.__init_size)
+            if run_offset == 0 or data_last <= first:
+                # sparse run
+                buff.write(b'\x00' * (last - first))
+                continue
+            first_cluster = (first - r.start) // cluster_size
+            skip = first - r.start - first_cluster * cluster_size
+            needed = data_last - first
+            cluster_count = (skip + needed + cluster_size - 1) // cluster_size
+            got = 0
+            async for data in self.__fs.read_sequential_clusters(run_offset + first_cluster, cluster_count):
+                if skip > 0:
+                    data = data[skip:]
+                    skip = 0
+                data = data[:needed - got]
                 buff.write(data)
-                if buff.tell() + start_offset_pos >= size:
+                got += len(data)
+                if got >= needed:
                     break
-            
-            else:
-                #print('Reading at offset: %s length: %s' % (run_offset, run_length))
-                async for data in self.__fs.read_sequential_clusters(run_offset, run_length): #debug = True
-                    buff.write(data)
-                    if buff.tell() + start_offset_pos >= size:
-                        break
-        
-        buff.seek(start_offset_pos,0)
-        data = buff.read(size)
-        return data
+            if got != needed:
+                raise Exception('Could not read the clusters of the file')
+            buff.write(b'\x00' * (last - data_last))
+
+        return buff.getvalue()
 
     async def setup(self):
         # parse the data attribute
-        fsize = await self.__fr.get_attribute(0x30)
-        fsize = fsize[0]
-        #input(fsize)
-        #input(self.__fr)
-        self.__dataattr = await self.__fr.get_attribute(0x80, name = self.datastream)
-        self.__dataattr = self.__dataattr[0]
+        dataattrs = await self.__fr.get_attribute(0x80, name = self.datastream)
+        self.__dataattr = dataattrs[0]
         if self.__dataattr.header.non_resident is False:
             self.__buffer.write(self.__dataattr.header.data)
             self.__buffer_total_len = len(self.__dataattr.header.data)
@@ -161,14 +94,29 @@ class NTFSFile:
             self.__buffer.seek(0, 0)
         else:
             # creating mapping of data runs
-            self.__real_size = 0
-            prevstart = 0
-            for i, x in enumerate(self.__dataattr.header.data_runs):
-                run_offset, run_length = x
-                self.__dataruns.append((range(prevstart, prevstart + run_length*self.__fs.cluster_size), i))
-                prevstart += run_length*self.__fs.cluster_size
-                self.__real_size += run_length*self.__fs.cluster_size
-            #input(self.__dataruns)
+            # a fragmented file has its runs in more attributes (listed by the attribute list), the first one has the sizes
+            parts = {}
+            for attr in dataattrs:
+                if attr.header.non_resident is True:
+                    parts.setdefault(attr.header.start_vcn, attr.header)
+            first = parts.get(0, self.__dataattr.header)
+            allocated = 0
+            for start_vcn in sorted(parts):
+                for run_offset, run_length in parts[start_vcn].data_runs:
+                    self.__dataruns.append((range(allocated, allocated + run_length*self.__fs.cluster_size), len(self.__data_runs)))
+                    self.__data_runs.append((run_offset, run_length))
+                    allocated += run_length*self.__fs.cluster_size
+            if 0 in parts:
+                self.__real_size = first.real_size
+                self.__init_size = min(first.init_size, first.real_size)
+            else:
+                # the sizes are not known
+                self.__real_size = allocated
+                self.__init_size = allocated
+            if self.__real_size > allocated:
+                if first.compression_unit != 0:
+                    raise NotImplementedError('Compressed NTFS files are not supported')
+                raise Exception('The data runs of the file are shorter than the file')
 
     async def tell(self):
         if self.__dataattr.header.non_resident is False:
@@ -186,7 +134,7 @@ class NTFSFile:
             elif whence == 1:
                 newpos = pos + self.__pos
             elif whence == 2:
-                newpos = self.__real_size - pos
+                newpos = self.__real_size + pos
             else:
                 raise Exception('Invalid whence value')
             
