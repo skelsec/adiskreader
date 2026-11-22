@@ -17,16 +17,16 @@ Check out the community version at [OctoPwn - Live](https://live.octopwn.com/)
 *The project is still in developement, expect issues*
 
 This is a library with a simple API to read (only read) and recover files from disk images of virtual machines (VHD, VHDX, VMDK, QCOW2, VDI), raw disks/partitions obtained by `dd` or similar command, Windows images (WIM, ESD), optical disc images (ISO) and Veeam backups. Opening a file on the disk image provides an async fileobject so you can perform file operations like `read` `seek` `tell` without extracting the entire file.  
-The image does not need to be on your machine: it is read in parts over SMB or SSH as well, only the blocks needed are fetched.  
+The image does not need to be on your machine: it is read in parts over SMB, SSH or NFS as well, only the blocks needed are fetched.  
 Everything is written in Python, without the tools or libraries of the vendors and without mounting anything. It comes with an example console client to demonstrate the core features.
 
 # Features
 
 ## Datasource
 
-| File | Gzip | SMB | SSH(SFTP) | File inside another image |
-|------|------|-----|-----------|---------------------------|
-| ✔️    | ✔️    | ✔️   | ✔️         | ✔️                         |
+| File | Gzip | SMB | SSH(SFTP) | NFSv3 | File inside another image |
+|------|------|-----|-----------|-------|---------------------------|
+| ✔️    | ✔️    | ✔️   | ✔️         | ✔️     | ✔️                         |
 
 Disks made of several files (snapshots, differencing disks, split extents, backup chains) find their other files next to the one opened, on all of the datasources.
 
@@ -104,6 +104,11 @@ The type of the image is detected, it can be given in the scheme of the URL as w
 ### Parsing a VHD file over SSH
 `adiskreader-console ssh+password+vhd://test:test@10.10.10.3/mnt/hgfs/vhdxtest/17763.737.amd64fre.rs5_release_svc_refresh.190906-2324_server_serverdatacentereval_en-us_1.vhd`  
 
+### Parsing a VHDX file over NFS
+`adiskreader-console nfs://10.10.10.4/srv/exports/images/disk.vhdx`  
+The path is the export followed by the path of the file in it. Symbolic links are followed inside of the export. The server gets the uid and gid 0 (AUTH_SYS), others can be set: `nfs://10.10.10.4/srv/exports/images/disk.vhdx?uid=1000&gid=1000`  
+Add `privport=1` for the servers which only accept clients connecting from a port below 1024 (needs the rights to use one).
+
 ### Parsing a local VHDX file
 `adiskreader-console file://C:\Users\test\images\test.vhdx`
 
@@ -176,7 +181,7 @@ inner_disk = await Disk.from_datasource(inner_ds)
 # Testing
 `pip install pytest pytest-asyncio` then `python3 -m pytest tests`
 
-The tests read test images with known contents: disks and archives made by Windows, qemu, VirtualBox, VMware and Veeam (the scripts making them are in `tests`), and compare what is read with what those tools read from them. Nothing is mounted and no root rights are needed. Some of the tests use `7z` and `qemu-img` when they are installed, the SMB and SSH tests need a server (`ADISKREADER_SMB_URL`, `ADISKREADER_SSH_URL`, see `tests/smb`).  
+The tests read test images with known contents: disks and archives made by Windows, qemu, VirtualBox, VMware and Veeam (the scripts making them are in `tests`), and compare what is read with what those tools read from them. Nothing is mounted and no root rights are needed. Some of the tests use `7z` and `qemu-img` when they are installed, the SMB and SSH tests need a server (`ADISKREADER_SMB_URL`, `ADISKREADER_SSH_URL`, see `tests/smb`). The NFS tests have their own small server (`tests/nfs_server.py`), they are run against a real one as well when `ADISKREADER_NFS_URL` is set.  
 They are run for every pull request (`.github/workflows/tests.yaml`), with and without the native module.
 
 The large test files are not kept in this repository: the tests download the ones they need (about 90 MB in total) from the releases of [adiskreader-testfiles](https://github.com/skelsec/adiskreader-testfiles) to `tests/testfiles` and check their SHA-256.  

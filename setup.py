@@ -48,6 +48,9 @@ setup(
 		'winacl>=0.1.8',
 		'aiosmb>=0.4.10',
         'amurex>=0.0.4',
+        'anfs>=0.0.3',
+        # anfs needs the xdrlib module, which is not part of Python since 3.13
+        'standard-xdrlib; python_version >= "3.13"',
         'prompt-toolkit>=3.0.2',
 		'tqdm',
 		'zstandard',

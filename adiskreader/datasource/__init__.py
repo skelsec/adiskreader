@@ -71,6 +71,10 @@ class DataSource:
             from adiskreader.datasource.ssh import SSHFileSource
             return await SSHFileSource.from_url(url)
 
+        if 'NFS' in schemes:
+            from adiskreader.datasource.nfs import NFSFileSource
+            return await NFSFileSource.from_url(url)
+
         if 'FILE' in schemes:
             if 'GZ' in schemes or 'GZIP' in schemes:
                 from adiskreader.datasource.gzipfile import GzipFileSource

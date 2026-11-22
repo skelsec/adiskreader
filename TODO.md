@@ -3,7 +3,10 @@
 Ideas for later, in no particular order.
 
 ## Datasources
-- NFS: read the images over NFS with [anfs](https://github.com/skelsec/anfs), the same way as the SMB and SSH datasources (`adiskreader/datasource`), with the lookup of the other files of a disk next to the one opened.
+- NFS: the datasource was tested with the server of the tests only (`tests/nfs_server.py`), run the tests against real servers (`ADISKREADER_NFS_URL`).
+- NFS: the MOUNT service must be on the port of the url when the url has one.
+- NFS: symbolic links pointing to another export of the server are not followed.
+- anfs imports `xdrlib`, which is not part of Python since 3.13: adiskreader installs the `standard-xdrlib` backport for it, anfs should not need it.
 
 ## Filesystems
 - ext4
