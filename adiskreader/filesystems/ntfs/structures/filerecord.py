@@ -327,11 +327,6 @@ class FileRecord:
                 else:
                     files.append(fn.name)
 
-        yield fullpath, dirs, files, dir_indices
-        dirs = []
-        dir_indices = []
-        files = []
-
         index_alloc = await self.get_attribute(0xA0, '$I30')
         if len(index_alloc) > 0:
             index_alloc = index_alloc[0] # there should only be one index alloc or none
@@ -348,12 +343,6 @@ class FileRecord:
                             dir_indices.append((index.file_ref, fn.name))
                         else:
                             files.append(fn.name)
-                    
-                        if len(dirs) > 100 or len(files) > 100:
-                            yield fullpath, dirs, files, dir_indices
-                            dirs = []
-                            dir_indices = []
-                            files = []
 
         yield fullpath, dirs, files, dir_indices
 

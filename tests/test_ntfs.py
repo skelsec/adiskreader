@@ -1,5 +1,6 @@
 import pytest
 import os
+import ntpath
 from config import *
 from checks import *
 from vmdk_builder import build_test_disks
@@ -97,3 +98,41 @@ async def test_ntfs_file_fullread(open_disk):
 async def test_ntfs_file_ops(open_disk):
     fs = await open_fs(open_disk)
     await check_file_ops(fs, load_manifest('ntfs'))
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('open_disk', DISKS)
+async def test_ntfs_walk_once(open_disk):
+    fs = await open_fs(open_disk)
+    roots = []
+    async for root, dirs, files in fs.walk():
+        roots.append(root)
+    assert len(roots) == len(set(roots))
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('open_disk', DISKS)
+async def test_ntfs_ls(open_disk):
+    fs = await open_fs(open_disk)
+    manifest = load_manifest('ntfs')
+    listed = {}
+    async for root, dirs, files in fs.walk():
+        entries = []
+        async for etype, name, entry in fs.ls(root):
+            entries.append((etype, name))
+            listed[ntpath.join(root, name)] = etype
+        expected = [('dir', name) for name in dirs] + [('file', name) for name in files]
+        assert sorted(entries) == sorted(expected)
+
+    for dir_path in manifest['dirs']:
+        assert listed['\\' + dir_path] == 'dir'
+    for file_path in manifest['files']:
+        assert listed['\\' + file_path] == 'file'
+
+@pytest.mark.asyncio
+async def test_ntfs_ls_errors():
+    fs = await open_fs(open_raw)
+    with pytest.raises(FileNotFoundError):
+        async for _ in fs.ls('\\nonexistent'):
+            pass
+    with pytest.raises(NotADirectoryError):
+        async for _ in fs.ls('\\SAM'):
+            pass

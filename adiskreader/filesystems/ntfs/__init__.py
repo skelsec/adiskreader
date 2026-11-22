@@ -82,8 +82,20 @@ class NTFS(FileSystem):
     
 
     async def ls(self, path:str):
-        async for entry in self.mft.list_directory(path):
-            yield entry
+        """Lists a directory, yields the same (type, name, entry) tuples as get_children of the directory"""
+        inode = await self.mft.find_path(path)
+        if inode is None:
+            raise FileNotFoundError
+        if inode.is_directory() is False:
+            raise NotADirectoryError
+        async for index, fn in inode.list_directory():
+            if index.file_ref < 24:
+                # these are reserved
+                continue
+            if fn.is_directory() is True:
+                yield 'dir', fn.name, fn
+            else:
+                yield 'file', fn.name, fn
 
     async def stat(self, path:str):
         inode = await self.mft.find_path(path)
