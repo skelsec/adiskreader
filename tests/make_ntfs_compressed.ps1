@@ -6,7 +6,8 @@ and an elevated PowerShell, the Hyper-V role is NOT needed (diskpart and Mount-D
 
     powershell -ExecutionPolicy Bypass -File make_ntfs_compressed.ps1 [-OutDir C:\adiskreader_ntfs_fixtures] [-WithEfs]
 
-A dynamic VHDX is created with two NTFS partitions (4096 and 512 byte clusters), the same files are written to both:
+Two dynamic disks are created with an NTFS partition on each: a VHDX with 4096 byte clusters and a VHD with 512 byte
+clusters, the same files are written to both:
 
     lznt1\      files compressed by NTFS (LZNT1): written to a compressed directory, compressed after they were written,
                 partly overwritten, sparse and compressed, with named data streams, long enough to need an attribute list
@@ -16,10 +17,10 @@ A dynamic VHDX is created with two NTFS partitions (4096 and 512 byte clusters),
     efs\        an encrypted file, only with -WithEfs: this makes an EFS certificate for the user running the script,
                 the only thing touched outside of OutDir
 
-The data of the files is generated (no files of the system are copied). After the disk is detached it is attached again
+The data of the files is generated (no files of the system are copied). After a disk is detached it is attached again
 read-only and every file and stream is read back through Windows and compared with the data written.
 
-Everything is collected in <OutDir>\adiskreader_ntfs_fixtures.zip: the disk and manifest.json, which describes the
+Everything is collected in <OutDir>\adiskreader_ntfs_fixtures.zip: the disks and manifest.json, which describes the
 volumes and the files (size, sha256, attributes, size on the disk, valid data length, named data streams).
 #>
 param(
@@ -29,12 +30,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$DISK_SIZE_MB   = 256
+$DISK_SIZE_MB   = 128
 $PARTITION_SIZE = 100MB
 $JUNK_SIZE      = 24MB
 $VOLUMES = @(
-    @{ label = 'ADRNTFS4K';  cluster_size = 4096 },
-    @{ label = 'ADRNTFS512'; cluster_size = 512 }
+    @{ label = 'ADRNTFS4K';  cluster_size = 4096; image = 'ntfs_windows_4k.vhdx' },
+    # a VHDX has 4096 byte physical sectors, Windows does not format it with smaller clusters
+    @{ label = 'ADRNTFS512'; cluster_size = 512;  image = 'ntfs_windows_512.vhd' }
 )
 $WOF_FORMATS = @('XPRESS4K', 'XPRESS8K', 'XPRESS16K', 'LZX')
 
@@ -515,37 +517,35 @@ else {
 $OutDir = (Resolve-Path $OutDir).Path
 $PackDir = Join-Path $OutDir 'pack'
 New-Item -ItemType Directory -Path $PackDir | Out-Null
-$image = Join-Path $PackDir 'ntfs_windows.vhdx'
-
 $made = @()
 try {
-    Write-Host 'Creating the disk'
-    Invoke-DiskPart @(('create vdisk file="{0}" maximum={1} type=expandable' -f $image, $DISK_SIZE_MB))
-    $number = Mount-Image $image
-    Initialize-Disk -Number $number -PartitionStyle MBR
     foreach ($volume in $VOLUMES) {
         Write-Host ("Writing the files of {0}" -f $volume.label)
+        $image = Join-Path $PackDir $volume.image
+        Invoke-DiskPart @(('create vdisk file="{0}" maximum={1} type=expandable' -f $image, $DISK_SIZE_MB))
+        $number = Mount-Image $image
+        Initialize-Disk -Number $number -PartitionStyle MBR
         $partition = New-Partition -DiskNumber $number -Size $PARTITION_SIZE -AssignDriveLetter
-        Format-Volume -DriveLetter $partition.DriveLetter -FileSystem NTFS -AllocationUnitSize $volume.cluster_size -NewFileSystemLabel $volume.label -Confirm:$false | Out-Null
+        Format-Volume -DriveLetter $partition.DriveLetter -FileSystem NTFS -AllocationUnitSize $volume.cluster_size -NewFileSystemLabel $volume.label -Confirm:$false -ErrorAction Stop | Out-Null
         $script:Root = Get-VolumeRoot $number $partition.PartitionNumber
         Write-Volume
         $script:First = $false
+        Dismount-Image $image | Out-Null
+
+        Write-Host ("Reading the files of {0} back" -f $volume.label)
+        $number = Mount-Image $image -ReadOnly
+        $files = Test-Volume (Get-VolumeRoot $number $partition.PartitionNumber)
+        Dismount-Image $image | Out-Null
         $made += [ordered]@{
+            image        = $volume.image
             label        = $volume.label
             cluster_size = $volume.cluster_size
             partition    = $partition.PartitionNumber
             offset       = $partition.Offset
             size         = $partition.Size
+            files        = $files
         }
     }
-    Dismount-Image $image | Out-Null
-
-    Write-Host 'Reading the files back'
-    $number = Mount-Image $image -ReadOnly
-    foreach ($volume in $made) {
-        $volume['files'] = Test-Volume (Get-VolumeRoot $number $volume.partition)
-    }
-    Dismount-Image $image | Out-Null
 }
 finally {
     foreach ($path in @($script:Mounted)) {
@@ -556,7 +556,6 @@ finally {
 $os = Get-CimInstance Win32_OperatingSystem
 $manifest = [ordered]@{
     created_on = ('{0} {1}' -f $os.Caption, $os.Version)
-    image      = 'ntfs_windows.vhdx'
     # files which could not be made on this system
     skipped    = @($script:Skipped)
     volumes    = $made
