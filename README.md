@@ -24,7 +24,7 @@ Everything is written in Python, without the tools or libraries of the vendors a
 
 ## Datasource
 
-| File | Gzip | SMB | SSH(SFTP) | NFSv3 | File inside another image |
+| File | Gzip | SMB | SSH(SFTP) | NFS (v3, v4) | File inside another image |
 |------|------|-----|-----------|-------|---------------------------|
 | ✔️    | ✔️    | ✔️   | ✔️         | ✔️     | ✔️                         |
 
@@ -106,8 +106,15 @@ The type of the image is detected, it can be given in the scheme of the URL as w
 
 ### Parsing a VHDX file over NFS
 `adiskreader-console nfs://10.10.10.4/srv/exports/images/disk.vhdx`  
-The path is the export followed by the path of the file in it. Symbolic links are followed inside of the export. The server gets the uid and gid 0 (AUTH_SYS), others can be set: `nfs://10.10.10.4/srv/exports/images/disk.vhdx?uid=1000&gid=1000`  
-Add `privport=1` for the servers which only accept clients connecting from a port below 1024 (needs the rights to use one).
+The path is the export followed by the path of the file in it. Symbolic links are followed inside of the export.  
+The connection is made by [anfs](https://github.com/skelsec/anfs), the URL takes its parameters:  
+- the server gets the uid and gid 0 (AUTH_SYS), others can be set: `nfs://10.10.10.4/srv/exports/images/disk.vhdx?uid=1000&gid=1000`
+- Kerberos: `nfs+kerberos-password://REALM\user:password@server/srv/exports/images/disk.vhdx?dc=<ip of the KDC>`
+- the port in the URL is the one of the NFS service, `mountport` is the one of the mount service: the portmapper is asked for the ones not given
+- `privport=1` for the servers which only accept clients connecting from a port below 1024 (needs the rights to use one)
+
+NFSv3 is used by default. With `version=4` (or `4.0`, `4.1`, `4.2`) it is NFSv4: no mount service and no portmapper is needed, and the path is the one in the namespace of the server, which may differ from the path of the export: `nfs://10.10.10.4/images/disk.vhdx?version=4`  
+Absolute symbolic links are followed inside the export of the file only, with NFSv4 they are taken as paths in the namespace of the server.
 
 ### Parsing a local VHDX file
 `adiskreader-console file://C:\Users\test\images\test.vhdx`
@@ -181,7 +188,7 @@ inner_disk = await Disk.from_datasource(inner_ds)
 # Testing
 `pip install pytest pytest-asyncio` then `python3 -m pytest tests`
 
-The tests read test images with known contents: disks and archives made by Windows, qemu, VirtualBox, VMware and Veeam (the scripts making them are in `tests`), and compare what is read with what those tools read from them. Nothing is mounted and no root rights are needed. Some of the tests use `7z` and `qemu-img` when they are installed, the SMB and SSH tests need a server (`ADISKREADER_SMB_URL`, `ADISKREADER_SSH_URL`, see `tests/smb`). The NFS tests have their own small server (`tests/nfs_server.py`), they are run against a real one as well when `ADISKREADER_NFS_URL` is set.  
+The tests read test images with known contents: disks and archives made by Windows, qemu, VirtualBox, VMware and Veeam (the scripts making them are in `tests`), and compare what is read with what those tools read from them. Nothing is mounted and no root rights are needed. Some of the tests use `7z` and `qemu-img` when they are installed, the SMB and SSH tests need a server (`ADISKREADER_SMB_URL`, `ADISKREADER_SSH_URL`, see `tests/smb`). The NFS tests have their own small server (`tests/nfs_server.py`), they are run against a real one as well when `ADISKREADER_NFS_URL` is set. The `test_nfs_lab` tests (NFSv4, Kerberos, real servers) need the docker lab of [anfs](https://github.com/skelsec/anfs) (its `lab` folder), they are skipped without it.  
 They are run for every pull request (`.github/workflows/tests.yaml`), with and without the native module.
 
 The large test files are not kept in this repository: the tests download the ones they need (about 90 MB in total) from the releases of [adiskreader-testfiles](https://github.com/skelsec/adiskreader-testfiles) to `tests/testfiles` and check their SHA-256.  

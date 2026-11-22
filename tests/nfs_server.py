@@ -77,7 +77,8 @@ class NFSTestServer:
         await self.__server.wait_closed()
 
     def url(self, path, params = '', scheme = 'nfs'):
-        return '%s://127.0.0.1:%s%s/%s%s' % (scheme, self.port, self.export, path, params)
+        # both of the services are on the port, the portmapper is not asked
+        return '%s://127.0.0.1:%s%s/%s?mountport=%s%s' % (scheme, self.port, self.export, path, self.port, params)
 
     def get_handle(self, path):
         if path not in self.__handles:
