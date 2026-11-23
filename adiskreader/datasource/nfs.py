@@ -1,3 +1,4 @@
+import posixpath
 from urllib.parse import urlparse, unquote
 from adiskreader.datasource import DataSource, sibling_parts, sibling_url
 from anfs.protocol.nfs3.common.factory import NFS3ConnectionFactory
@@ -27,6 +28,9 @@ class NFSFileSource(DataSource):
     nfs+kerberos-password://REALM\\user:password@server/...?dc=<ip of the KDC>: kerberos (RPCSEC_GSS), sec=krb5|krb5i|krb5p
     the port in the url is the one of the NFS service, mountport=<int> and portmapport=<int> are the ones of the other services
     privport=1: connects from a port below 1024
+    A connected anfs client can be used as well, see from_client.
+    as_owner (config only): with AUTH_SYS the server takes our word for who we are, every directory and file is
+    accessed as its owner then. Without it all calls are made with the credential of the connection.
     """
     def __init__(self, config):
         super().__init__(config)
@@ -38,6 +42,8 @@ class NFSFileSource(DataSource):
         # parts of the path of the export, the absolute symbolic links are resolved with it (NFSv4: empty)
         self.__export = None
         self.__handle = None
+        # the credential the file is read with, None is the one of the connection
+        self.__auth = None
         self.__size = None
         self.__offset = 0
 
@@ -46,6 +52,42 @@ class NFSFileSource(DataSource):
         ds = NFSFileSource(config)
         await ds.setup()
         return ds
+
+    @staticmethod
+    async def from_client(client, path:str, export:str = '', dir_handles:list = None, as_owner:bool = False, schemes:list = None):
+        """
+        Opens a file using a connected anfs client (NFSv3 or NFSv4), the client is not closed by the datasource.
+        path is the path of the file from the directory of the last handle in dir_handles, by default from
+        the root of the client: that is the root of the mounted export with NFSv3 and of the server with NFSv4.
+        export is the path of the mounted export on the server, the absolute symbolic links are resolved with it.
+        """
+        parts = [part for part in path.replace('\\', '/').split('/') if part not in ['', '.']]
+        if len(parts) == 0:
+            raise Exception('No file in the path: %s' % path)
+        config = {
+            'client': client,
+            'dir_handles': list(dir_handles) if dir_handles is not None else [0],
+            'export': [part for part in export.split('/') if part != ''],
+            'parts': parts,
+            'path': '/'.join(parts),
+            'as_owner': as_owner,
+            'schemes': schemes if schemes is not None else ['NFS'],
+        }
+        return await NFSFileSource.from_config(config)
+
+    async def owner_auth(self, handle, attrs = None):
+        """The credential of the owner of the handle when as_owner is set and the connection can act as it, else None"""
+        if self.config.get('as_owner') is not True:
+            return None
+        if attrs is None:
+            attrs, err = await self.__client.getattr(handle)
+            if err is not None:
+                return None
+        uid = getattr(attrs, 'uid', None)
+        gid = getattr(attrs, 'gid', None)
+        if uid is None or gid is None:
+            return None
+        return self.__client.owner_auth(uid, gid)
 
     async def mount(self, path:str):
         """Mounts the export of the path, returns its handle, its parts and the parts of the path inside of it"""
@@ -109,7 +151,8 @@ class NFSFileSource(DataSource):
                     raise Exception('File is outside of the export: %s' % '/'.join(parts))
                 dir_handles.pop()
                 continue
-            entry, err = await self.__client.lookup(dir_handles[-1], name)
+            # search permission is on the directory, the link and the file are read as their own owner
+            entry, err = await self.__client.lookup(dir_handles[-1], name, auth = await self.owner_auth(dir_handles[-1]))
             if err is not None and getattr(err, 'status', None) != NFS_ERR_NOENT:
                 raise err
             if entry is False:
@@ -117,11 +160,12 @@ class NFSFileSource(DataSource):
             attrs, err = await self.__client.getattr(entry.handle)
             if err is not None:
                 raise err
+            auth = await self.owner_auth(entry.handle, attrs)
             if attrs.type == NFS_TYPE_SYMLINK:
                 links += 1
                 if links > NFS_MAX_LINKS:
                     raise Exception('Too many symbolic links: %s' % '/'.join(parts))
-                target, err = await self.__client.readlink(entry.handle)
+                target, err = await self.__client.readlink(entry.handle, auth = auth)
                 if err is not None:
                     raise err
                 target_names = [part for part in target.split('/') if part not in ['', '.']]
@@ -139,7 +183,7 @@ class NFSFileSource(DataSource):
             elif attrs.type != NFS_TYPE_FILE:
                 raise Exception('Not a file: %s' % '/'.join(parts))
             else:
-                return entry.handle, attrs, dir_handles
+                return entry.handle, attrs, dir_handles, auth
         raise Exception('Not a file: %s' % '/'.join(parts))
 
     async def setup(self):
@@ -174,7 +218,7 @@ class NFSFileSource(DataSource):
             raise Exception('No client or url provided in config')
 
         try:
-            self.__handle, attrs, self.__dir_handles = await self.lookup(dir_handles, parts)
+            self.__handle, attrs, self.__dir_handles, self.__auth = await self.lookup(dir_handles, parts)
             self.__size = attrs.size
         except Exception:
             await self.close()
@@ -187,7 +231,7 @@ class NFSFileSource(DataSource):
         size = min(size, self.__size - self.__offset)
         parts = []
         while size > 0:
-            data, err = await self.__client.read(self.__handle, self.__offset, min(size, NFS_READ_SIZE))
+            data, err = await self.__client.read(self.__handle, self.__offset, min(size, NFS_READ_SIZE), auth = self.__auth)
             if err is not None:
                 raise err
             if len(data) == 0:
@@ -232,6 +276,8 @@ class NFSFileSource(DataSource):
         )
         if config.get('url') is not None:
             config['url'] = sibling_url(config['url'], parts)
+        if config.get('path') is not None:
+            config['path'] = posixpath.join(posixpath.dirname(config['path']), *parts)
         return await NFSFileSource.from_config(config)
 
     @staticmethod

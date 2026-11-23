@@ -172,6 +172,46 @@ async def test_nfs_credential():
                 await ds.close()
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('as_owner', [False, True])
+async def test_nfs_from_client(as_owner):
+    # a connected anfs client is used, as_owner makes the calls as the owner of the directory and of the file
+    filepath = get_image(NTFS_TEST_FILE_GZ)
+    owner = (os.stat(filepath).st_uid, os.stat(filepath).st_gid)
+    async with Server() as server:
+        factory = NFS3ConnectionFactory.from_url(server.url('', '&uid=4242&gid=4343'))
+        mount = factory.get_mount()
+        _, err = await mount.connect()
+        assert err is None
+        handle, err = await mount.mount(server.server.export)
+        assert err is None
+        await mount.disconnect()
+        client = factory.get_client(handle)
+        _, err = await client.connect()
+        assert err is None
+        try:
+            ds = await NFSFileSource.from_client(client, '/' + filepath.name, export = server.server.export, as_owner = as_owner)
+            try:
+                assert ds.config['path'] == filepath.name
+                server.server.credentials.clear()
+                assert await ds.read(512) == open(filepath, 'rb').read(512)
+                assert server.server.credentials == {owner if as_owner is True else (4242, 4343)}
+                sibling = await ds.open_sibling(get_image(VFAT_16_TEST_FILE_GZ).name)
+                try:
+                    assert sibling.config['path'] == get_image(VFAT_16_TEST_FILE_GZ).name
+                    await check_sibling(ds, sibling, get_image(VFAT_16_TEST_FILE_GZ))
+                finally:
+                    await sibling.close()
+                disk = await Disk.from_datasource(ds)
+                assert isinstance(disk, RAWDisk)
+            finally:
+                await ds.close()
+            # the client is not closed by the datasource
+            attrs, err = await client.getattr(0)
+            assert err is None
+        finally:
+            await client.disconnect()
+
+@pytest.mark.asyncio
 async def test_nfs_errors():
     filepath = get_image(VFAT_16_TEST_FILE_GZ)
     get_diff_fixtures()

@@ -112,8 +112,21 @@ class SSHFileSource(DataSource):
         config = self.sibling_config(
             sftp = self.__sftp,
             path = posixpath.join(posixpath.dirname(self.__path), *parts),
-            url = sibling_url(self.config['url'], parts),
         )
+        # there is no url when the datasource was created from an SFTP session
+        if config.get('url') is not None:
+            config['url'] = sibling_url(config['url'], parts)
+        return await SSHFileSource.from_config(config)
+
+    @staticmethod
+    async def from_sftp(sftp, path:str, schemes:list = None):
+        """Opens a file using an SFTP session of amurex, the session is not closed by the datasource"""
+        config = {
+            'sftp': sftp,
+            'path': path,
+            'url': None,
+            'schemes': schemes if schemes is not None else ['SSH'],
+        }
         return await SSHFileSource.from_config(config)
 
     @staticmethod
